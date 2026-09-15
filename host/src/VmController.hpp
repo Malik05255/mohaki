@@ -2,7 +2,6 @@
 
 #include <windows.h>
 #include <filesystem>
-#include <optional>
 #include <string>
 
 namespace jawal {
@@ -11,8 +10,7 @@ struct VmConfig {
     std::filesystem::path qemuExe;
     std::filesystem::path runtimeDir;
     std::filesystem::path systemDisk;
-    std::filesystem::path userDisk;
-    std::filesystem::path snapshotDisk;
+    std::filesystem::path dataDisk;
     unsigned memoryMb{4096};
     unsigned cpuCores{4};
 };
