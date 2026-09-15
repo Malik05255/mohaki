@@ -1,0 +1,40 @@
+# Packages/features intentionally omitted from the Jawal production product.
+# This file is documentation + input for validation tooling. Actual omission
+# must happen in product/device makefiles; do not delete random files post-build.
+
+# Stock consumer apps
+Dialer
+Contacts
+Messaging
+Email
+Calendar
+Gallery2
+Music
+Camera2
+DeskClock
+LiveWallpapersPicker
+PhotoTable
+QuickSearchBox
+
+# Physical-phone-only user components
+Stk
+CarrierConfigUI
+CellBroadcastReceiver
+CellBroadcastService
+EmergencyInfo
+
+# Features not exposed by Jawal v1
+NfcNci
+Tag
+PrintSpooler
+BasicDreams
+
+# Development/test/demo packages
+Development
+SampleLocationAttribution
+CubeLiveWallpapers
+EasterEgg
+
+# Do NOT add compatibility-critical components such as WebView,
+# PermissionController, PackageInstaller, DocumentsUI, DownloadProvider,
+# media framework, networking, keystore, ART or SurfaceFlinger here.
