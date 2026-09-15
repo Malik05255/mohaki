@@ -63,17 +63,17 @@ bool RunHiddenAndWait(const std::wstring& command, const std::filesystem::path& 
     return exitCode == 0;
 }
 
-bool EnsureDeviceOverlay(const std::filesystem::path& runtime,
-                         const std::filesystem::path& base,
-                         const std::filesystem::path& overlay) {
-    if (std::filesystem::exists(overlay)) return true;
-    std::filesystem::create_directories(overlay.parent_path());
+bool EnsureDataOverlay(const std::filesystem::path& runtime,
+                       const std::filesystem::path& dataTemplate,
+                       const std::filesystem::path& userData) {
+    if (std::filesystem::exists(userData)) return true;
+    std::filesystem::create_directories(userData.parent_path());
 
     const auto qemuImg = runtime / L"qemu" / L"qemu-img.exe";
-    if (!std::filesystem::exists(qemuImg) || !std::filesystem::exists(base)) return false;
+    if (!std::filesystem::exists(qemuImg) || !std::filesystem::exists(dataTemplate)) return false;
 
     std::wstring command = L"\"" + qemuImg.wstring() + L"\" create -f qcow2 -F qcow2 -b \"" +
-                           base.wstring() + L"\" \"" + overlay.wstring() + L"\"";
+                           dataTemplate.wstring() + L"\" \"" + userData.wstring() + L"\"";
     return RunHiddenAndWait(command, runtime);
 }
 
@@ -91,10 +91,12 @@ void ResizeEmbeddedSurface(HWND renderHost) {
 void StartRuntime(HWND owner) {
     const auto root = ModuleDirectory();
     const auto runtime = root / L"runtime";
-    const auto baseDisk = runtime / L"images" / L"jawal-base.qcow2";
-    const auto deviceDisk = LocalDataDirectory() / L"device.qcow2";
+    const auto systemDisk = runtime / L"images" / L"jawal-system.qcow2";
+    const auto dataTemplate = runtime / L"images" / L"jawal-data-template.qcow2";
+    const auto userData = LocalDataDirectory() / L"data.qcow2";
 
-    if (!EnsureDeviceOverlay(runtime, baseDisk, deviceDisk)) {
+    if (!std::filesystem::exists(systemDisk) ||
+        !EnsureDataOverlay(runtime, dataTemplate, userData)) {
         MessageBoxW(owner,
                     L"ملفات نظام جوال غير مكتملة. يجب إنشاء حزمة Android الأساسية قبل التشغيل.",
                     L"جوال", MB_OK | MB_ICONERROR | MB_RTLREADING);
@@ -104,8 +106,8 @@ void StartRuntime(HWND owner) {
     jawal::VmConfig config{};
     config.qemuExe = runtime / L"qemu" / L"qemu-system-x86_64.exe";
     config.runtimeDir = runtime;
-    config.systemDisk = baseDisk;
-    config.userDisk = deviceDisk;
+    config.systemDisk = systemDisk;
+    config.dataDisk = userData;
 
     SYSTEM_INFO info{};
     GetSystemInfo(&info);
