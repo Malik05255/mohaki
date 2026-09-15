@@ -69,7 +69,7 @@ std::wstring VmController::BuildCommandLine(HWND, const VmConfig& c) const {
         << L" -device usb-tablet"
         << L" -device usb-kbd"
         << L" -device virtio-rng-pci"
-        << L" -nic user,model=virtio-net-pci"
+        << L" -nic user,model=virtio-net-pci,hostfwd=tcp:127.0.0.1:27183-:27183"
         << L" -drive file=" << Quote(c.userDisk)
         << L",if=virtio,format=qcow2,cache=writeback,discard=unmap"
         << L" -monitor none -serial none"
