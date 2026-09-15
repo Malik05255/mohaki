@@ -1,3 +1,4 @@
+#include "PackageBridge.hpp"
 #include "VmController.hpp"
 
 #include <dwmapi.h>
@@ -7,6 +8,7 @@
 
 #include <filesystem>
 #include <string>
+#include <thread>
 #include <vector>
 
 namespace {
@@ -14,6 +16,13 @@ namespace {
 constexpr wchar_t kWindowClass[] = L"JawalPhoneWindow";
 constexpr int kInitialWidth = 450;
 constexpr int kInitialHeight = 800;
+constexpr UINT kStartRuntimeMessage = WM_APP + 1;
+constexpr UINT kInstallCompleteMessage = WM_APP + 2;
+
+struct InstallCompletion {
+    jawal::PackageInstallResult result;
+    std::wstring fileName;
+};
 
 jawal::VmController gVm;
 HWND gRenderHost = nullptr;
@@ -114,6 +123,15 @@ void StartRuntime(HWND owner) {
     }
 }
 
+void InstallDroppedApk(HWND owner, std::filesystem::path file) {
+    std::thread([owner, file = std::move(file)]() {
+        auto* completion = new InstallCompletion{jawal::InstallApk(file), file.filename().wstring()};
+        if (!PostMessageW(owner, kInstallCompleteMessage, 0, reinterpret_cast<LPARAM>(completion))) {
+            delete completion;
+        }
+    }).detach();
+}
+
 LRESULT CALLBACK WindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
     switch (msg) {
     case WM_CREATE: {
@@ -121,12 +139,21 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
         gRenderHost = CreateWindowExW(0, L"STATIC", nullptr,
                                       WS_CHILD | WS_VISIBLE | WS_CLIPCHILDREN | WS_CLIPSIBLINGS,
                                       0, 0, 1, 1, hwnd, nullptr, GetModuleHandleW(nullptr), nullptr);
-        PostMessageW(hwnd, WM_APP + 1, 0, 0);
+        PostMessageW(hwnd, kStartRuntimeMessage, 0, 0);
         return 0;
     }
-    case WM_APP + 1:
+    case kStartRuntimeMessage:
         StartRuntime(hwnd);
         return 0;
+    case kInstallCompleteMessage: {
+        auto* completion = reinterpret_cast<InstallCompletion*>(lParam);
+        if (!completion) return 0;
+        const UINT icon = completion->result.success() ? MB_ICONINFORMATION : MB_ICONERROR;
+        std::wstring message = completion->fileName + L"\n\n" + completion->result.detail;
+        MessageBoxW(hwnd, message.c_str(), L"جوال", MB_OK | icon | MB_RTLREADING);
+        delete completion;
+        return 0;
+    }
     case WM_SIZE: {
         RECT rc{};
         GetClientRect(hwnd, &rc);
@@ -137,19 +164,17 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
         return 0;
     }
     case WM_DROPFILES: {
-        // APK drop UX is intentionally accepted at the shell level now. The production
-        // PackageBridge will pass the file to the privileged guest service without
-        // exposing an emulator toolbar or command prompt.
         HDROP drop = reinterpret_cast<HDROP>(wParam);
-        wchar_t path[MAX_PATH]{};
-        if (DragQueryFileW(drop, 0, path, MAX_PATH)) {
+        const UINT count = DragQueryFileW(drop, 0xFFFFFFFF, nullptr, 0);
+        for (UINT index = 0; index < count; ++index) {
+            const UINT chars = DragQueryFileW(drop, index, nullptr, 0);
+            std::wstring path(chars + 1, L'\0');
+            DragQueryFileW(drop, index, path.data(), chars + 1);
+            path.resize(chars);
+
             std::filesystem::path file(path);
-            if (file.extension() != L".apk") {
-                MessageBoxW(hwnd, L"اسحب ملف APK لتثبيته داخل جوال.", L"جوال",
-                            MB_OK | MB_ICONINFORMATION | MB_RTLREADING);
-            } else {
-                MessageBoxW(hwnd, L"تم استلام ملف APK. ربط التثبيت الصامت بخدمة Jawal داخل Android هو الخطوة التالية.",
-                            L"جوال", MB_OK | MB_ICONINFORMATION | MB_RTLREADING);
+            if (_wcsicmp(file.extension().c_str(), L".apk") == 0) {
+                InstallDroppedApk(hwnd, std::move(file));
             }
         }
         DragFinish(drop);
@@ -191,8 +216,6 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int showCommand) {
         nullptr, nullptr, instance, nullptr);
     if (!hwnd) return 2;
 
-    // Windows 11: let the OS use its native rounded-window treatment. Jawal keeps
-    // the chrome visually minimal; Android itself fills the client area.
     constexpr DWORD DWMWA_WINDOW_CORNER_PREFERENCE_LOCAL = 33;
     constexpr int DWMWCP_ROUND = 2;
     int corner = DWMWCP_ROUND;
