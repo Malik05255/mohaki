@@ -1,6 +1,9 @@
 #include "VmController.hpp"
 
+#include <winsock2.h>
+#include <ws2tcpip.h>
 #include <dwmapi.h>
+
 #include <chrono>
 #include <sstream>
 #include <thread>
@@ -40,6 +43,54 @@ std::wstring Quote(const std::filesystem::path& value) {
     return L"\"" + value.wstring() + L"\"";
 }
 
+bool SendSocketAll(SOCKET socket, const char* data, int size) {
+    while (size > 0) {
+        const int sent = send(socket, data, size, 0);
+        if (sent <= 0) return false;
+        data += sent;
+        size -= sent;
+    }
+    return true;
+}
+
+bool QmpCommand(const char* command) {
+    WSADATA wsa{};
+    if (WSAStartup(MAKEWORD(2, 2), &wsa) != 0) return false;
+
+    SOCKET socket = ::socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+    if (socket == INVALID_SOCKET) {
+        WSACleanup();
+        return false;
+    }
+
+    sockaddr_in address{};
+    address.sin_family = AF_INET;
+    address.sin_port = htons(45454);
+    InetPtonW(AF_INET, L"127.0.0.1", &address.sin_addr);
+
+    bool ok = connect(socket, reinterpret_cast<sockaddr*>(&address), sizeof(address)) == 0;
+    if (ok) {
+        DWORD timeoutMs = 1000;
+        setsockopt(socket, SOL_SOCKET, SO_RCVTIMEO,
+                   reinterpret_cast<const char*>(&timeoutMs), sizeof(timeoutMs));
+        char greeting[2048]{};
+        recv(socket, greeting, sizeof(greeting), 0); // QMP greeting; content isn't needed here.
+
+        static constexpr char capabilities[] = "{\"execute\":\"qmp_capabilities\"}\r\n";
+        ok = SendSocketAll(socket, capabilities, static_cast<int>(sizeof(capabilities) - 1));
+        if (ok) {
+            char reply[512]{};
+            recv(socket, reply, sizeof(reply), 0);
+            std::string payload = std::string("{\"execute\":\"") + command + "\"}\r\n";
+            ok = SendSocketAll(socket, payload.c_str(), static_cast<int>(payload.size()));
+        }
+    }
+
+    closesocket(socket);
+    WSACleanup();
+    return ok;
+}
+
 } // namespace
 
 VmController::~VmController() {
@@ -53,6 +104,8 @@ bool VmController::Running() const noexcept {
 
 std::wstring VmController::BuildCommandLine(HWND, const VmConfig& c) const {
     const auto firmware = c.runtimeDir / L"firmware" / L"edk2-x86_64-code.fd";
+    const auto kernel = c.runtimeDir / L"android" / L"kernel";
+    const auto initrd = c.runtimeDir / L"android" / L"initrd.img";
 
     std::wostringstream cmd;
     cmd << Quote(c.qemuExe)
@@ -61,16 +114,28 @@ std::wstring VmController::BuildCommandLine(HWND, const VmConfig& c) const {
         << L" -accel whpx"
         << L" -machine q35"
         << L" -smp " << c.cpuCores
-        << L" -m " << c.memoryMb
-        << L" -bios " << Quote(firmware)
+        << L" -m " << c.memoryMb;
+
+    if (std::filesystem::exists(firmware)) {
+        cmd << L" -bios " << Quote(firmware);
+    }
+
+    cmd << L" -kernel " << Quote(kernel)
+        << L" -initrd " << Quote(initrd)
+        << L" -append \"root=/dev/ram0 SRC=/AndroidOS DATA=vdb HWC=drm_minigbm GRALLOC=minigbm_arcvm FFMPEG_CODEC=1 FFMPEG_PREFER_C2=1 quiet\""
         << L" -device virtio-vga-gl"
         << L" -display sdl,gl=on,window-close=off"
+        << L" -audiodev sdl,id=jawal_audio"
+        << L" -device ich9-intel-hda"
+        << L" -device hda-duplex,audiodev=jawal_audio"
         << L" -device qemu-xhci"
         << L" -device usb-tablet"
         << L" -device usb-kbd"
         << L" -device virtio-rng-pci"
         << L" -nic user,model=virtio-net-pci,hostfwd=tcp:127.0.0.1:27183-:27183"
-        << L" -drive file=" << Quote(c.userDisk)
+        << L" -drive file=" << Quote(c.systemDisk)
+        << L",if=virtio,format=qcow2,readonly=on,cache=none"
+        << L" -drive file=" << Quote(c.dataDisk)
         << L",if=virtio,format=qcow2,cache=writeback,discard=unmap"
         << L" -monitor none -serial none"
         << L" -qmp tcp:127.0.0.1:45454,server=on,wait=off";
@@ -80,12 +145,14 @@ std::wstring VmController::BuildCommandLine(HWND, const VmConfig& c) const {
 bool VmController::Start(HWND renderParent, const VmConfig& config, std::wstring* error) {
     if (Running()) return true;
 
-    if (!std::filesystem::exists(config.qemuExe)) {
-        if (error) *error = L"QEMU runtime is missing.";
-        return false;
-    }
-    if (!std::filesystem::exists(config.userDisk)) {
-        if (error) *error = L"Jawal device disk is missing. Packaging must create the copy-on-write device image first.";
+    const auto kernel = config.runtimeDir / L"android" / L"kernel";
+    const auto initrd = config.runtimeDir / L"android" / L"initrd.img";
+    if (!std::filesystem::exists(config.qemuExe) ||
+        !std::filesystem::exists(kernel) ||
+        !std::filesystem::exists(initrd) ||
+        !std::filesystem::exists(config.systemDisk) ||
+        !std::filesystem::exists(config.dataDisk)) {
+        if (error) *error = L"حزمة تشغيل جوال غير مكتملة.";
         return false;
     }
 
@@ -110,7 +177,7 @@ bool VmController::Start(HWND renderParent, const VmConfig& config, std::wstring
         &pi);
 
     if (!created) {
-        if (error) *error = L"Unable to start the Android runtime. Windows error: " + std::to_wstring(GetLastError());
+        if (error) *error = L"تعذر تشغيل Android. خطأ Windows: " + std::to_wstring(GetLastError());
         return false;
     }
 
@@ -118,11 +185,11 @@ bool VmController::Start(HWND renderParent, const VmConfig& config, std::wstring
     CloseHandle(process_.hThread);
     process_.hThread = nullptr;
 
-    // QEMU's SDL window stays the actual GPU presentation surface. We re-parent
-    // that native window into Jawal instead of encoding/streaming frames.
-    HWND vmWindow = WaitForVmWindow(process_.dwProcessId, std::chrono::seconds(12));
+    // Keep QEMU's accelerated native presentation surface; embedding avoids a
+    // video encode/decode pipeline and its latency/copy overhead.
+    HWND vmWindow = WaitForVmWindow(process_.dwProcessId, std::chrono::seconds(15));
     if (!vmWindow) {
-        if (error) *error = L"Android started but its render surface did not become available.";
+        if (error) *error = L"بدأ Android لكن سطح العرض المسرّع لم يظهر.";
         Stop();
         return false;
     }
@@ -143,13 +210,15 @@ bool VmController::Start(HWND renderParent, const VmConfig& config, std::wstring
 void VmController::Stop() noexcept {
     if (!process_.hProcess) return;
 
-    WindowSearch search{process_.dwProcessId, nullptr};
-    EnumWindows(FindProcessWindow, reinterpret_cast<LPARAM>(&search));
-    if (search.hwnd) PostMessageW(search.hwnd, WM_CLOSE, 0, 0);
-
-    if (WaitForSingleObject(process_.hProcess, 2500) == WAIT_TIMEOUT) {
-        TerminateProcess(process_.hProcess, 0);
-        WaitForSingleObject(process_.hProcess, 1000);
+    // Ask Android/ACPI to shut down first so ext4 user data isn't torn down by
+    // killing the VM process. Force quit is only the last fallback.
+    QmpCommand("system_powerdown");
+    if (WaitForSingleObject(process_.hProcess, 8000) == WAIT_TIMEOUT) {
+        QmpCommand("quit");
+        if (WaitForSingleObject(process_.hProcess, 1500) == WAIT_TIMEOUT) {
+            TerminateProcess(process_.hProcess, 0);
+            WaitForSingleObject(process_.hProcess, 1000);
+        }
     }
 
     CloseHandle(process_.hProcess);
