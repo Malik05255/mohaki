@@ -1,0 +1,34 @@
+name: Jawal CI
+
+on:
+  push:
+    branches: [main, jawal-v1]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  windows-host:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Configure Jawal host
+        run: cmake -S host -B build/host -G "Visual Studio 17 2022" -A x64
+      - name: Build Jawal host
+        run: cmake --build build/host --config Release --parallel
+      - name: Upload host binary
+        uses: actions/upload-artifact@v4
+        with:
+          name: jawal-host-windows-x64
+          path: build/host/Release/Jawal.exe
+
+  scripts:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Parse shell build scripts
+        run: |
+          bash -n android/scripts/sync-and-build.sh
+          bash -n android/scripts/package-runtime.sh
+          bash -n tools/fetch-store.sh
+          bash -n tools/validate-product.sh
