@@ -18,9 +18,12 @@ PRODUCT_SYSTEM_PROPERTIES += \
     ro.jawal.runtime=true \
     ro.jawal.form_factor=virtual_phone
 
-# Tiny privileged bridge also uses Soong's `overrides` mechanism to prevent
-# selected stock applications from entering the image in the first place.
-PRODUCT_PACKAGES += JawalSystemBridge
+# System integration + the only bundled consumer-facing app.
+# Launcher/SystemUI/Settings remain because they are part of the operating
+# environment, not bundled content applications.
+PRODUCT_PACKAGES += \
+    JawalSystemBridge \
+    JawalStore
 
 # No proprietary GMS/Google Play or proprietary ARM native-bridge blobs are
 # committed here. Licensed product overlays can add them separately.
