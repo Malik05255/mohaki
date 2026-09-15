@@ -62,10 +62,10 @@ public final class BridgeService extends Service {
              DataInputStream input = new DataInputStream(new BufferedInputStream(client.getInputStream()));
              DataOutputStream output = new DataOutputStream(new BufferedOutputStream(client.getOutputStream()))) {
 
-            // QEMU user-mode host forwarding normally arrives from the virtual
-            // gateway. Do not expose a privileged installer to arbitrary guest apps.
+            // QEMU user-mode host forwarding enters the guest from 10.0.2.2.
+            // Reject guest-local clients: this service has privileged install rights.
             final String source = client.getInetAddress().getHostAddress();
-            if (!("10.0.2.2".equals(source) || "127.0.0.1".equals(source))) {
+            if (!"10.0.2.2".equals(source)) {
                 Log.w(TAG, "Rejected bridge connection from " + source);
                 output.writeInt(-10);
                 output.flush();
@@ -124,9 +124,20 @@ public final class BridgeService extends Service {
                 receiver = new BroadcastReceiver() {
                     @Override
                     public void onReceive(Context context, Intent intent) {
-                        result.set(intent.getIntExtra(
+                        final int status = intent.getIntExtra(
                                 PackageInstaller.EXTRA_STATUS,
-                                PackageInstaller.STATUS_FAILURE));
+                                PackageInstaller.STATUS_FAILURE);
+
+                        if (status == PackageInstaller.STATUS_PENDING_USER_ACTION) {
+                            final Intent confirmation = intent.getParcelableExtra(Intent.EXTRA_INTENT, Intent.class);
+                            if (confirmation != null) {
+                                confirmation.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+                                startActivity(confirmation);
+                                return;
+                            }
+                        }
+
+                        result.set(status);
                         finished.countDown();
                     }
                 };
