@@ -2,7 +2,14 @@
 # The upstream PC device layer comes from Android-Generic/BlissOS, while the
 # visible product remains a minimal Android phone runtime.
 
+# Prevent upstream optional hardware/user features from entering the product.
+TARGET_FACE_UNLOCK_SUPPORTED := false
+
 $(call inherit-product, device/generic/common/x86_64.mk)
+
+# Strip inherited Android/Bliss user apps and PC-distribution utilities only
+# after the x86 device layer has declared its packages.
+$(call inherit-product, device/jawal/prune.mk)
 
 PRODUCT_NAME := jawal_x86_64
 PRODUCT_DEVICE := x86_64
