@@ -4,6 +4,7 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 AOSP_DIR="${JAWAL_AOSP_DIR:-$ROOT/.work/android-src}"
 OUT_DIR="${JAWAL_ARTIFACTS_DIR:-$ROOT/dist/android}"
+RUNTIME_DIR="${JAWAL_RUNTIME_DIR:-$ROOT/dist/runtime}"
 MANIFEST_URL="https://github.com/BlissOS/platform_manifest.git"
 MANIFEST_BRANCH="${JAWAL_ANDROID_BRANCH:-voyager-x86}"
 BUILD_VARIANT="${JAWAL_SERVICES_VARIANT:-microg}"
@@ -19,7 +20,7 @@ for tool in git repo rsync python3 curl; do
   command -v "$tool" >/dev/null || { echo "Missing build tool: $tool" >&2; exit 2; }
 done
 
-mkdir -p "$AOSP_DIR" "$OUT_DIR"
+mkdir -p "$AOSP_DIR" "$OUT_DIR" "$RUNTIME_DIR"
 cd "$AOSP_DIR"
 
 if [[ ! -d .repo ]]; then
@@ -37,7 +38,7 @@ rsync -a --delete "$ROOT/android/jawal-system/" vendor/jawal/jawal-system/
 rsync -a --delete "$ROOT/android/store/" vendor/jawal/store/
 
 # Fetch only the store APK used by the open flavor. It is signature-verified
-# against the publisher certificate before being copied into the Android tree.
+# against the publisher certificate before Soong is allowed to package it.
 export AOSP_DIR
 "$ROOT/tools/fetch-store.sh" "$AOSP_DIR/vendor/jawal/store/AuroraStore.apk"
 
@@ -70,4 +71,11 @@ du -b "$OUT_DIR/jawal-android.iso" > "$OUT_DIR/image-size.txt"
 
 "$ROOT/tools/validate-product.sh" "$PRODUCT_OUT" "$OUT_DIR"
 
-printf '\nJawal Android build complete:\n  %s\n' "$OUT_DIR/jawal-android.iso"
+# Convert the validated ISO output immediately into the immutable-system +
+# sparse-userdata layout consumed by Jawal.exe. The Windows app never presents
+# the Android-x86 installer UI to the user.
+rm -rf "$RUNTIME_DIR/android" "$RUNTIME_DIR/images"
+"$ROOT/android/scripts/package-runtime.sh" "$OUT_DIR/jawal-android.iso" "$RUNTIME_DIR"
+
+printf '\nJawal Android build complete:\n  ISO:     %s\n  Runtime: %s\n' \
+       "$OUT_DIR/jawal-android.iso" "$RUNTIME_DIR"
