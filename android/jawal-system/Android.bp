@@ -1,0 +1,40 @@
+android_app {
+    name: "JawalSystemBridge",
+    manifest: "AndroidManifest.xml",
+    srcs: ["src/**/*.java"],
+    platform_apis: true,
+    privileged: true,
+    certificate: "platform",
+    system_ext_specific: true,
+    optimize: {
+        enabled: true,
+        shrink: true,
+        optimize: true,
+    },
+
+    // Build-time pruning: if these stock apps are inherited by the generic
+    // Android product, JawalSystemBridge replaces them in PRODUCT_PACKAGES.
+    // Framework/API providers required for third-party app compatibility are
+    // deliberately not listed here.
+    overrides: [
+        "AccessibilityMenu",
+        "BasicDreams",
+        "Browser2",
+        "BuiltInPrintService",
+        "Calendar",
+        "Camera2",
+        "Contacts",
+        "DeskClock",
+        "DeviceAsWebcam",
+        "EasterEgg",
+        "Gallery2",
+        "LiveWallpapersPicker",
+        "Music",
+        "MusicFX",
+        "PhotoTable",
+        "PrintRecommendationService",
+        "PrintSpooler",
+        "QuickSearchBox",
+        "Traceur",
+    ],
+}
