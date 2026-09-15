@@ -1,0 +1,9 @@
+android_app_import {
+    name: "JawalStore",
+    apk: "AuroraStore.apk",
+    presigned: true,
+    product_specific: true,
+    dex_preopt: {
+        enabled: true,
+    },
+}
