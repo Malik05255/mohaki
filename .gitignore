@@ -1,0 +1,17 @@
+.vs/
+.vscode/
+build/
+out/
+*.user
+*.suo
+*.log
+*.qcow2
+*.img
+*.iso
+*.apk
+*.aab
+runtime/
+dist/
+android/aosp/
+android/out/
+third_party/binaries/
