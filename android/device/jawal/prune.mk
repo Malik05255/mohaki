@@ -10,6 +10,9 @@ JAWAL_REMOVE_PACKAGES := \
     AvatarPicker \
     BasicDreams \
     BlissUpdater \
+    Updater \
+    SetupWizard \
+    LineageSetupWizard \
     BOSWallpapers \
     Browser2 \
     BuiltInPrintService \
@@ -56,9 +59,13 @@ JAWAL_REMOVE_PACKAGES := \
     Twelve \
     VisualizationWallpapers \
     WallpaperPicker2 \
+    WallpaperBackup \
     WeatherIcons \
     Eleven \
+    FMRadio \
+    FM2 \
     CarrierConfigUI \
+    CarrierDefaultApp \
     CellBroadcastReceiver \
     CellBroadcastService \
     CellBroadcastApp \
@@ -70,6 +77,7 @@ JAWAL_REMOVE_PACKAGES := \
     NfcNci \
     NfcNciApex \
     Tag \
+    SecureElement \
     com.android.nfcservices \
     ManagedProvisioning \
     CompanionDeviceManager \
@@ -182,9 +190,9 @@ PRODUCT_PACKAGES := $(filter-out $(JAWAL_REMOVE_PACKAGES),$(PRODUCT_PACKAGES))
 PRODUCT_PACKAGES_DEBUG := $(filter-out $(JAWAL_REMOVE_PACKAGES),$(PRODUCT_PACKAGES_DEBUG))
 
 # Camera APIs remain in framework for application compatibility, but Jawal v1
-# has no camera passthrough. Remove emulator camera HAL/provider modules and any
-# inherited camera feature declarations so applications receive "no camera"
-# rather than paying for a fake/unused camera implementation.
+# has no camera passthrough. Also remove unsupported NFC/UWB feature declarations.
+# The audio engine/codecs are preserved; only the large stock sound catalogue is
+# reduced to one ringtone, notification and alarm sound.
 PRODUCT_COPY_FILES := $(filter-out \
     %/android.hardware.camera.xml:% \
     %/android.hardware.camera.front.xml:% \
@@ -196,12 +204,16 @@ PRODUCT_COPY_FILES := $(filter-out \
     %/android.hardware.nfc.hce.xml:% \
     %/android.hardware.nfc.hcef.xml:% \
     %/android.hardware.uwb.xml:% \
+    %:$(TARGET_COPY_OUT_PRODUCT)/media/audio/alarms/% \
+    %:$(TARGET_COPY_OUT_PRODUCT)/media/audio/notifications/% \
+    %:$(TARGET_COPY_OUT_PRODUCT)/media/audio/ringtones/% \
     frameworks/native/data/etc/tablet_core_hardware.xml:%,$(PRODUCT_COPY_FILES))
 
-# Keep the normal handheld contract for app/UI selection while omitting
-# hardware-specific features Jawal does not expose.
 PRODUCT_COPY_FILES += \
-    frameworks/native/data/etc/handheld_core_hardware.xml:$(TARGET_COPY_OUT_VENDOR)/etc/permissions/handheld_core_hardware.xml
+    frameworks/native/data/etc/handheld_core_hardware.xml:$(TARGET_COPY_OUT_VENDOR)/etc/permissions/handheld_core_hardware.xml \
+    frameworks/base/data/sounds/Alarm_Classic.ogg:$(TARGET_COPY_OUT_PRODUCT)/media/audio/alarms/Alarm_Classic.ogg \
+    frameworks/base/data/sounds/notifications/pixiedust.ogg:$(TARGET_COPY_OUT_PRODUCT)/media/audio/notifications/pixiedust.ogg \
+    frameworks/base/data/sounds/Ring_Synth_04.ogg:$(TARGET_COPY_OUT_PRODUCT)/media/audio/ringtones/Ring_Synth_04.ogg
 
 # Windows/Jawal owns runtime updates and full-device backup. Android-side OTA,
 # DSU, Seedvault/local backup transports, printing and MTP are deliberately out.
