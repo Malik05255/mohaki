@@ -12,5 +12,7 @@ public final class BootReceiver extends BroadcastReceiver {
     public void onReceive(Context context, Intent intent) {
         Log.i(TAG, "Jawal guest integration boot event: " + intent.getAction());
         context.startService(new Intent(context, BridgeService.class));
+        context.startService(new Intent(context, ControlService.class));
+        context.startService(new Intent(context, GpuProbeService.class));
     }
 }
