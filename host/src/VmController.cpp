@@ -79,6 +79,9 @@ std::wstring VmController::BuildCommandLine(HWND, const VmConfig& c) const {
     const auto kernel = c.runtimeDir / L"android" / L"kernel";
     const auto initrd = c.runtimeDir / L"android" / L"initrd.img";
 
+    std::wostringstream video;
+    video << L"video=Virtual-1:" << c.displayWidth << L"x" << c.displayHeight << L"@" << c.refreshRate;
+
     std::wostringstream cmd;
     cmd << Quote(c.qemuExe)
         << L" -name JawalRuntime"
@@ -94,7 +97,8 @@ std::wstring VmController::BuildCommandLine(HWND, const VmConfig& c) const {
 
     cmd << L" -kernel " << Quote(kernel)
         << L" -initrd " << Quote(initrd)
-        << L" -append \"root=/dev/ram0 SRC=/AndroidOS DATA=/dev/vdb HWC=drm_minigbm GRALLOC=minigbm_arcvm FFMPEG_CODEC=1 FFMPEG_PREFER_C2=1 quiet\""
+        << L" -append \"root=/dev/ram0 SRC=/AndroidOS DATA=/dev/vdb HWC=drm_minigbm GRALLOC=minigbm_arcvm FFMPEG_CODEC=1 FFMPEG_PREFER_C2=1 "
+        << video.str() << L" quiet\""
         << L" -device virtio-vga-gl"
         << L" -display sdl,gl=on,window-close=off"
         << L" -audiodev sdl,id=jawal_audio"
@@ -104,7 +108,7 @@ std::wstring VmController::BuildCommandLine(HWND, const VmConfig& c) const {
         << L" -device usb-tablet"
         << L" -device usb-kbd"
         << L" -device virtio-rng-pci"
-        << L" -nic user,model=virtio-net-pci,hostfwd=tcp:127.0.0.1:27183-:27183,hostfwd=tcp:127.0.0.1:27184-:27184,hostfwd=tcp:127.0.0.1:27185-:27185"
+        << L" -nic user,model=virtio-net-pci,hostfwd=tcp:127.0.0.1:27183-:27183,hostfwd=tcp:127.0.0.1:27184-:27184,hostfwd=tcp:127.0.0.1:27185-:27185,hostfwd=tcp:127.0.0.1:27188-:27188"
         << L" -drive file=" << Quote(c.systemDisk)
         << L",if=virtio,format=qcow2,readonly=on,cache=none"
         << L" -drive file=" << Quote(c.dataDisk)
@@ -143,7 +147,7 @@ bool VmController::QmpCommand(const std::string& json, std::string* replyOut) co
                    reinterpret_cast<const char*>(&timeoutMs), sizeof(timeoutMs));
 
         char buffer[8192]{};
-        recv(socket, buffer, sizeof(buffer) - 1, 0); // greeting
+        recv(socket, buffer, sizeof(buffer) - 1, 0);
 
         static constexpr char capabilities[] = "{\"execute\":\"qmp_capabilities\"}\r\n";
         ok = SendSocketAll(socket, capabilities, static_cast<int>(sizeof(capabilities) - 1));
@@ -199,16 +203,9 @@ bool VmController::Start(HWND renderParent, const VmConfig& config, std::wstring
 
     PROCESS_INFORMATION pi{};
     const BOOL created = CreateProcessW(
-        config.qemuExe.c_str(),
-        mutableCommand.data(),
-        nullptr,
-        nullptr,
-        FALSE,
-        CREATE_NO_WINDOW | CREATE_UNICODE_ENVIRONMENT,
-        nullptr,
-        config.runtimeDir.c_str(),
-        &startup,
-        &pi);
+        config.qemuExe.c_str(), mutableCommand.data(), nullptr, nullptr, FALSE,
+        CREATE_NO_WINDOW | CREATE_UNICODE_ENVIRONMENT, nullptr,
+        config.runtimeDir.c_str(), &startup, &pi);
 
     if (!created) {
         if (error) *error = L"تعذر تشغيل Android. خطأ Windows: " + std::to_wstring(GetLastError());
@@ -245,7 +242,6 @@ bool VmController::Start(HWND renderParent, const VmConfig& config, std::wstring
 bool VmController::SaveQuickResume(const std::filesystem::path& marker, std::wstring* error) {
     if (!Running()) return false;
 
-    // Keep exactly one VM-state snapshot. Deleting a missing snapshot is harmless.
     std::string ignored;
     QmpHumanMonitor("delvm jawal_quick_resume", &ignored);
 

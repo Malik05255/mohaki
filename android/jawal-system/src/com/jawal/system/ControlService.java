@@ -1,9 +1,13 @@
 package com.jawal.system;
 
+import android.app.ActivityManager;
 import android.app.Service;
+import android.content.ClipData;
+import android.content.ClipboardManager;
 import android.content.Intent;
 import android.content.pm.PackageManager;
 import android.os.IBinder;
+import android.util.Base64;
 import android.util.Log;
 
 import java.io.BufferedReader;
@@ -17,6 +21,7 @@ import java.net.InetAddress;
 import java.net.ServerSocket;
 import java.net.Socket;
 import java.nio.charset.StandardCharsets;
+import java.util.List;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -26,6 +31,7 @@ public final class ControlService extends Service {
     private static final int HOST_CONTROL_PORT = 27185;
     private static final int ARM64_RESULT_PORT = 27187;
     private static final int ARM64_MAGIC = 0x4A415236; // JAR6
+    private static final int MAX_CLIPBOARD_BYTES = 64 * 1024;
 
     private final ExecutorService executor = Executors.newFixedThreadPool(2);
     private final AtomicInteger arm64Result = new AtomicInteger(0);
@@ -75,12 +81,17 @@ public final class ControlService extends Service {
             arm64Result.set(0);
             return "OK";
         }
-        if ("ARM64_RESULT".equals(command)) {
-            return "OK " + arm64Result.get();
-        }
+        if ("ARM64_RESULT".equals(command)) return "OK " + arm64Result.get();
+        if ("CLIPBOARD_GET".equals(command)) return clipboardGet();
+        if (command.startsWith("CLIPBOARD_SET ")) return clipboardSet(command.substring("CLIPBOARD_SET ".length()));
+
         if (command.startsWith("PACKAGE ")) {
             String packageName = command.substring("PACKAGE ".length()).trim();
             return isInstalled(packageName) ? "OK INSTALLED" : "OK MISSING";
+        }
+        if (command.startsWith("PROCESS ")) {
+            String packageName = command.substring("PROCESS ".length()).trim();
+            return isProcessRunning(packageName) ? "OK RUNNING" : "OK MISSING";
         }
         if (command.startsWith("LAUNCH ")) {
             String packageName = command.substring("LAUNCH ".length()).trim();
@@ -98,6 +109,42 @@ public final class ControlService extends Service {
         return "ERR UNKNOWN_COMMAND";
     }
 
+    private String clipboardGet() {
+        try {
+            ClipboardManager manager = getSystemService(ClipboardManager.class);
+            if (manager == null || !manager.hasPrimaryClip() || manager.getPrimaryClip() == null ||
+                    manager.getPrimaryClip().getItemCount() == 0) return "OK -";
+            CharSequence value = manager.getPrimaryClip().getItemAt(0).coerceToText(this);
+            if (value == null || value.length() == 0) return "OK -";
+            byte[] utf8 = value.toString().getBytes(StandardCharsets.UTF_8);
+            if (utf8.length > MAX_CLIPBOARD_BYTES) return "ERR CLIPBOARD_TOO_LARGE";
+            return "OK " + Base64.encodeToString(utf8, Base64.NO_WRAP);
+        } catch (Throwable error) {
+            Log.w(TAG, "Clipboard read failed", error);
+            return "ERR CLIPBOARD_READ";
+        }
+    }
+
+    private String clipboardSet(String encoded) {
+        try {
+            String text;
+            if ("-".equals(encoded)) {
+                text = "";
+            } else {
+                byte[] utf8 = Base64.decode(encoded, Base64.DEFAULT);
+                if (utf8.length > MAX_CLIPBOARD_BYTES) return "ERR CLIPBOARD_TOO_LARGE";
+                text = new String(utf8, StandardCharsets.UTF_8);
+            }
+            ClipboardManager manager = getSystemService(ClipboardManager.class);
+            if (manager == null) return "ERR CLIPBOARD_UNAVAILABLE";
+            manager.setPrimaryClip(ClipData.newPlainText("Jawal", text));
+            return "OK";
+        } catch (Throwable error) {
+            Log.w(TAG, "Clipboard write failed", error);
+            return "ERR CLIPBOARD_WRITE";
+        }
+    }
+
     private boolean isInstalled(String packageName) {
         try {
             getPackageManager().getPackageInfo(packageName, 0);
@@ -105,6 +152,27 @@ public final class ControlService extends Service {
         } catch (PackageManager.NameNotFoundException ignored) {
             return false;
         }
+    }
+
+    private boolean isProcessRunning(String packageName) {
+        try {
+            ActivityManager manager = getSystemService(ActivityManager.class);
+            List<ActivityManager.RunningAppProcessInfo> processes =
+                    manager != null ? manager.getRunningAppProcesses() : null;
+            if (processes == null) return false;
+            for (ActivityManager.RunningAppProcessInfo process : processes) {
+                if (process.pkgList == null) continue;
+                for (String candidate : process.pkgList) {
+                    if (packageName.equals(candidate) &&
+                            process.importance <= ActivityManager.RunningAppProcessInfo.IMPORTANCE_SERVICE) {
+                        return true;
+                    }
+                }
+            }
+        } catch (Throwable error) {
+            Log.w(TAG, "Unable to inspect process " + packageName, error);
+        }
+        return false;
     }
 
     private void serveArm64Results() {

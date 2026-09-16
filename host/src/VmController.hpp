@@ -16,6 +16,9 @@ struct VmConfig {
     std::filesystem::path quickResumeMarker;
     unsigned memoryMb{4096};
     unsigned cpuCores{4};
+    unsigned displayWidth{1080};
+    unsigned displayHeight{1920};
+    unsigned refreshRate{60};
     bool resumeQuickState{false};
 };
 

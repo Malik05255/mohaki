@@ -1,6 +1,9 @@
+#include "ClipboardBridge.hpp"
+#include "Diagnostics.hpp"
 #include "PackageBridge.hpp"
 #include "RuntimeIntegrity.hpp"
 #include "RuntimeSettings.hpp"
+#include "SettingsDialog.hpp"
 #include "VmController.hpp"
 
 #include <dwmapi.h>
@@ -18,19 +21,20 @@ namespace {
 
 constexpr wchar_t kWindowClass[] = L"JawalPhoneWindow";
 constexpr wchar_t kSingleInstanceMutex[] = L"Local\\Jawal.SingleInstance";
-constexpr int kInitialWidth = 450;
-constexpr int kInitialHeight = 800;
+constexpr int kInitialHeight = 820;
 constexpr UINT kStartRuntimeMessage = WM_APP + 1;
-constexpr UINT kInstallCompleteMessage = WM_APP + 2;
+constexpr UINT kTransferCompleteMessage = WM_APP + 2;
 constexpr UINT kMenuSettings = 0x1100;
 constexpr UINT kMenuFactoryReset = 0x1110;
 
-struct InstallCompletion {
-    jawal::PackageInstallResult result;
+struct TransferCompletion {
+    bool success{false};
     std::wstring fileName;
+    std::wstring detail;
 };
 
 jawal::VmController gVm;
+jawal::ClipboardBridge gClipboard;
 HWND gRenderHost = nullptr;
 HANDLE gSingleInstance = nullptr;
 
@@ -133,8 +137,10 @@ unsigned MaximumMemoryMb(unsigned totalMb) {
 }
 
 void StartRuntime(HWND owner) {
+    jawal::LogDiagnostic(L"Starting Android runtime");
     std::wstring virtualizationError;
     if (!WhpxReady(&virtualizationError)) {
+        jawal::LogDiagnostic(L"WHPX preflight failed: " + virtualizationError);
         MessageBoxW(owner, virtualizationError.c_str(), L"جوال", MB_OK | MB_ICONERROR | MB_RTLREADING);
         return;
     }
@@ -145,15 +151,17 @@ void StartRuntime(HWND owner) {
     const auto systemDisk = runtime / L"images" / L"jawal-system.qcow2";
     const auto dataTemplate = runtime / L"images" / L"jawal-data-template.qcow2";
     const auto userData = dataDirectory / L"data.qcow2";
+    const auto settings = jawal::LoadRuntimeSettings(dataDirectory);
 
     std::wstring integrityError;
     if (!jawal::VerifyRuntimeIntegrity(runtime, &integrityError)) {
+        jawal::LogDiagnostic(L"Runtime integrity failed: " + integrityError);
         MessageBoxW(owner, integrityError.c_str(), L"فحص نظام جوال", MB_OK | MB_ICONERROR | MB_RTLREADING);
         return;
     }
 
-    if (!std::filesystem::exists(systemDisk) ||
-        !EnsureDataOverlay(runtime, dataTemplate, userData)) {
+    if (!std::filesystem::exists(systemDisk) || !EnsureDataOverlay(runtime, dataTemplate, userData)) {
+        jawal::LogDiagnostic(L"Runtime payload or data overlay is incomplete");
         MessageBoxW(owner,
                     L"ملفات نظام جوال غير مكتملة. يجب إنشاء حزمة Android الأساسية قبل التشغيل.",
                     L"جوال", MB_OK | MB_ICONERROR | MB_RTLREADING);
@@ -169,7 +177,6 @@ void StartRuntime(HWND owner) {
     GlobalMemoryStatusEx(&memory);
     const unsigned totalMb = static_cast<unsigned>(memory.ullTotalPhys / (1024ull * 1024ull));
 
-    const auto settings = jawal::LoadRuntimeSettings(dataDirectory);
     const unsigned automaticCpu = AutomaticCpuCores(logicalProcessors);
     const unsigned maximumCpu = MaximumCpuCores(logicalProcessors);
     const unsigned automaticRam = AutomaticMemoryMb(totalMb);
@@ -181,18 +188,24 @@ void StartRuntime(HWND owner) {
     config.systemDisk = systemDisk;
     config.dataDisk = userData;
     config.quickResumeMarker = QuickResumeMarker();
-    config.resumeQuickState = std::filesystem::exists(config.quickResumeMarker);
-    config.cpuCores = settings.cpuCores == 0
-        ? automaticCpu
-        : std::clamp(settings.cpuCores, 1u, maximumCpu);
+    config.resumeQuickState = settings.quickResume && std::filesystem::exists(config.quickResumeMarker);
+    config.cpuCores = settings.cpuCores == 0 ? automaticCpu : std::clamp(settings.cpuCores, 1u, maximumCpu);
     config.memoryMb = settings.memoryMb == 0
         ? std::min(automaticRam, maximumRam)
         : std::clamp(settings.memoryMb, 2048u, maximumRam);
+    config.displayWidth = settings.displayWidth;
+    config.displayHeight = settings.displayHeight;
+    config.refreshRate = settings.refreshRate;
 
     std::wstring error;
     if (!gVm.Start(gRenderHost, config, &error)) {
+        jawal::LogDiagnostic(L"Android start failed: " + error);
         MessageBoxW(owner, error.c_str(), L"جوال", MB_OK | MB_ICONERROR | MB_RTLREADING);
+        return;
     }
+
+    if (settings.clipboardSync) gClipboard.Start(); else gClipboard.Stop();
+    jawal::LogDiagnostic(L"Android runtime started successfully");
 }
 
 bool FactoryReset(HWND owner) {
@@ -203,6 +216,8 @@ bool FactoryReset(HWND owner) {
         MB_YESNO | MB_DEFBUTTON2 | MB_ICONWARNING | MB_RTLREADING);
     if (confirm != IDYES) return false;
 
+    jawal::LogDiagnostic(L"Factory reset requested");
+    gClipboard.Stop();
     gVm.Stop(false);
 
     const auto root = ModuleDirectory();
@@ -215,6 +230,7 @@ bool FactoryReset(HWND owner) {
     ec.clear();
     std::filesystem::remove(userData, ec);
     if (ec && std::filesystem::exists(userData)) {
+        jawal::LogDiagnostic(L"Factory reset failed deleting data overlay");
         MessageBoxW(owner,
                     L"تعذر حذف بيانات الجوال الحالية. أغلق أي برنامج يستخدم ملفات Jawal ثم حاول مرة أخرى.",
                     L"فورمات جوال", MB_OK | MB_ICONERROR | MB_RTLREADING);
@@ -222,12 +238,14 @@ bool FactoryReset(HWND owner) {
     }
 
     if (!EnsureDataOverlay(runtime, dataTemplate, userData)) {
+        jawal::LogDiagnostic(L"Factory reset failed creating clean data overlay");
         MessageBoxW(owner,
                     L"تم حذف البيانات لكن تعذر إنشاء مساحة جوال نظيفة جديدة. تحقق من ملفات Runtime والمساحة الحرة.",
                     L"فورمات جوال", MB_OK | MB_ICONERROR | MB_RTLREADING);
         return false;
     }
 
+    jawal::LogDiagnostic(L"Factory reset completed");
     MessageBoxW(owner,
                 L"تمت تهيئة جوال بنجاح. سيبدأ الآن كجهاز Android نظيف بدون التطبيقات والحسابات السابقة.",
                 L"فورمات جوال", MB_OK | MB_ICONINFORMATION | MB_RTLREADING);
@@ -236,22 +254,32 @@ bool FactoryReset(HWND owner) {
 }
 
 void OpenRuntimeSettings(HWND owner) {
-    const auto settingsPath = LocalDataDirectory() / L"jawal.ini";
-    if (!std::filesystem::exists(settingsPath)) {
-        jawal::LoadRuntimeSettings(LocalDataDirectory());
-    }
-    HINSTANCE result = ShellExecuteW(owner, L"open", settingsPath.c_str(), nullptr, nullptr, SW_SHOWNORMAL);
-    if (reinterpret_cast<INT_PTR>(result) <= 32) {
-        MessageBoxW(owner,
-                    L"تعذر فتح إعدادات جوال.",
-                    L"جوال", MB_OK | MB_ICONERROR | MB_RTLREADING);
-    }
+    if (!jawal::ShowSettingsDialog(owner, LocalDataDirectory())) return;
+
+    jawal::LogDiagnostic(L"Runtime settings updated; restarting Android");
+    gClipboard.Stop();
+    gVm.Stop(false);
+    std::error_code ec;
+    std::filesystem::remove(QuickResumeMarker(), ec);
+    StartRuntime(owner);
 }
 
-void InstallDroppedApk(HWND owner, std::filesystem::path file) {
+void ProcessDroppedFile(HWND owner, std::filesystem::path file) {
     std::thread([owner, file = std::move(file)]() {
-        auto* completion = new InstallCompletion{jawal::InstallApk(file), file.filename().wstring()};
-        if (!PostMessageW(owner, kInstallCompleteMessage, 0, reinterpret_cast<LPARAM>(completion))) {
+        auto* completion = new TransferCompletion{};
+        completion->fileName = file.filename().wstring();
+        if (_wcsicmp(file.extension().c_str(), L".apk") == 0) {
+            const auto result = jawal::InstallApk(file);
+            completion->success = result.success();
+            completion->detail = result.detail;
+            jawal::LogDiagnostic(L"APK drop " + completion->fileName + (result.success() ? L" installed" : L" failed"));
+        } else {
+            const auto result = jawal::SendFileToGuest(file);
+            completion->success = result.success();
+            completion->detail = result.detail;
+            jawal::LogDiagnostic(L"File drop " + completion->fileName + (result.success() ? L" transferred" : L" failed"));
+        }
+        if (!PostMessageW(owner, kTransferCompleteMessage, 0, reinterpret_cast<LPARAM>(completion))) {
             delete completion;
         }
     }).detach();
@@ -267,7 +295,7 @@ void AddJawalSystemMenu(HWND hwnd) {
 
 LRESULT CALLBACK WindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
     switch (msg) {
-    case WM_CREATE: {
+    case WM_CREATE:
         DragAcceptFiles(hwnd, TRUE);
         AddJawalSystemMenu(hwnd);
         gRenderHost = CreateWindowExW(0, L"STATIC", nullptr,
@@ -275,7 +303,7 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
                                       0, 0, 1, 1, hwnd, nullptr, GetModuleHandleW(nullptr), nullptr);
         PostMessageW(hwnd, kStartRuntimeMessage, 0, 0);
         return 0;
-    }
+
     case WM_SYSCOMMAND:
         if ((wParam & 0xFFF0u) == kMenuSettings) {
             OpenRuntimeSettings(hwnd);
@@ -286,18 +314,21 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
             return 0;
         }
         break;
+
     case kStartRuntimeMessage:
         StartRuntime(hwnd);
         return 0;
-    case kInstallCompleteMessage: {
-        auto* completion = reinterpret_cast<InstallCompletion*>(lParam);
+
+    case kTransferCompleteMessage: {
+        auto* completion = reinterpret_cast<TransferCompletion*>(lParam);
         if (!completion) return 0;
-        const UINT icon = completion->result.success() ? MB_ICONINFORMATION : MB_ICONERROR;
-        std::wstring message = completion->fileName + L"\n\n" + completion->result.detail;
+        const UINT icon = completion->success ? MB_ICONINFORMATION : MB_ICONERROR;
+        std::wstring message = completion->fileName + L"\n\n" + completion->detail;
         MessageBoxW(hwnd, message.c_str(), L"جوال", MB_OK | icon | MB_RTLREADING);
         delete completion;
         return 0;
     }
+
     case WM_SIZE: {
         RECT rc{};
         GetClientRect(hwnd, &rc);
@@ -307,6 +338,7 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
         }
         return 0;
     }
+
     case WM_DROPFILES: {
         HDROP drop = reinterpret_cast<HDROP>(wParam);
         const UINT count = DragQueryFileW(drop, 0xFFFFFFFF, nullptr, 0);
@@ -315,19 +347,25 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
             std::wstring path(chars + 1, L'\0');
             DragQueryFileW(drop, index, path.data(), chars + 1);
             path.resize(chars);
-
             std::filesystem::path file(path);
-            if (_wcsicmp(file.extension().c_str(), L".apk") == 0) {
-                InstallDroppedApk(hwnd, std::move(file));
-            }
+            if (std::filesystem::is_regular_file(file)) ProcessDroppedFile(hwnd, std::move(file));
         }
         DragFinish(drop);
         return 0;
     }
-    case WM_DESTROY:
-        gVm.Stop(true, QuickResumeMarker());
+
+    case WM_DESTROY: {
+        gClipboard.Stop();
+        const auto settings = jawal::LoadRuntimeSettings(LocalDataDirectory());
+        if (!settings.quickResume) {
+            std::error_code ec;
+            std::filesystem::remove(QuickResumeMarker(), ec);
+        }
+        gVm.Stop(settings.quickResume, QuickResumeMarker());
+        jawal::LogDiagnostic(L"Jawal closed");
         PostQuitMessage(0);
         return 0;
+    }
     }
     return DefWindowProcW(hwnd, msg, wParam, lParam);
 }
@@ -336,6 +374,9 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
 
 int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int showCommand) {
     SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
+    const auto dataDirectory = LocalDataDirectory();
+    jawal::InitializeDiagnostics(dataDirectory);
+    jawal::LogDiagnostic(L"Jawal process started");
 
     gSingleInstance = CreateMutexW(nullptr, TRUE, kSingleInstanceMutex);
     if (!gSingleInstance) return 1;
@@ -358,9 +399,14 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int showCommand) {
     wc.hbrBackground = reinterpret_cast<HBRUSH>(GetStockObject(BLACK_BRUSH));
     if (!RegisterClassExW(&wc)) return 2;
 
+    const auto settings = jawal::LoadRuntimeSettings(dataDirectory);
+    const double aspect = settings.displayHeight == 0 ? 0.5625 :
+                          static_cast<double>(settings.displayWidth) / settings.displayHeight;
+    const int initialWidth = std::clamp(static_cast<int>(kInitialHeight * aspect), 380, 650);
+
     RECT desktop{};
     SystemParametersInfoW(SPI_GETWORKAREA, 0, &desktop, 0);
-    const int x = desktop.left + ((desktop.right - desktop.left) - kInitialWidth) / 2;
+    const int x = desktop.left + ((desktop.right - desktop.left) - initialWidth) / 2;
     const int y = desktop.top + ((desktop.bottom - desktop.top) - kInitialHeight) / 2;
 
     HWND hwnd = CreateWindowExW(
@@ -368,7 +414,7 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int showCommand) {
         kWindowClass,
         L"جوال",
         WS_OVERLAPPEDWINDOW | WS_CLIPCHILDREN,
-        x, y, kInitialWidth, kInitialHeight,
+        x, y, initialWidth, kInitialHeight,
         nullptr, nullptr, instance, nullptr);
     if (!hwnd) return 3;
 
