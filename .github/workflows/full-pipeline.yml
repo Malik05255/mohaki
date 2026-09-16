@@ -24,11 +24,6 @@ on:
         required: true
         default: "C:\\JawalTest\\apk-corpus"
         type: string
-      arm64_smoke_apk:
-        description: "ARM64-only smoke APK path on the hardware runner (used when native_bridge=libndk)"
-        required: true
-        default: "C:\\JawalTest\\arm64-smoke.apk"
-        type: string
 
 concurrency:
   group: jawal-full-pipeline
@@ -74,6 +69,7 @@ jobs:
           path: |
             dist/android-runtime/**
             dist/android/JawalSmokeApp.apk
+            dist/android/JawalArm64Smoke.apk
             dist/android/validation.txt
             dist/android/largest-files.tsv
             dist/android/build-metadata.txt
@@ -132,6 +128,7 @@ jobs:
             dist/JawalSetup.exe
             dist/portable/**
             dist/android/JawalSmokeApp.apk
+            dist/android/JawalArm64Smoke.apk
             dist/reports/**
 
   stage-4-runtime:
@@ -228,14 +225,14 @@ jobs:
           New-Item dist/reports -ItemType Directory -Force | Out-Null
           '{"passed":true,"skipped":true,"reason":"native_bridge=none"}' | Set-Content dist/reports/arm64-smoke.json -Encoding UTF8
 
-      - name: Validate active native bridge and install ARM64-only APK
+      - name: Validate active native bridge and install generated ARM64-only APK
         if: ${{ inputs.native_bridge == 'libndk' }}
         shell: pwsh
         run: |
           ./tools/windows-arm64-smoke.ps1 `
             -JawalExe 'dist/portable/Jawal.exe' `
             -JawalPkgExe 'dist/portable/JawalPkg.exe' `
-            -Arm64Apk '${{ inputs.arm64_smoke_apk }}' `
+            -Arm64Apk 'dist/android/JawalArm64Smoke.apk' `
             -TimeoutSeconds 240
 
       - uses: actions/upload-artifact@v4
