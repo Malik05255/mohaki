@@ -17,9 +17,10 @@ EMULATOR_VENDOR_NO_REBOOT_ESCROW := true
 
 $(call inherit-product, device/generic/common/x86_64.mk)
 
-# Strip inherited Android/Bliss user apps and PC-distribution utilities only
-# after the x86 device layer has declared its packages.
+# Strip inherited Android/Bliss user apps, PC-distribution utilities and fixed-
+# VM hardware helpers only after the upstream x86 device layer declares them.
 $(call inherit-product, device/jawal/prune.mk)
+$(call inherit-product, device/jawal/prune-hardware.mk)
 
 PRODUCT_NAME := jawal_x86_64
 PRODUCT_DEVICE := x86_64
