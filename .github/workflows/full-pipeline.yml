@@ -1,0 +1,171 @@
+name: Jawal Full 5-Stage Pipeline
+
+on:
+  workflow_dispatch:
+    inputs:
+      native_bridge:
+        description: "ARM native bridge: none or libndk"
+        required: true
+        default: "none"
+        type: choice
+        options: [none, libndk]
+      qemu_dir:
+        description: "QEMU Windows runtime directory on the Windows builder"
+        required: true
+        default: "C:\\Program Files\\qemu"
+        type: string
+      makensis:
+        description: "Full path to makensis.exe on the Windows builder"
+        required: true
+        default: "C:\\Program Files (x86)\\NSIS\\makensis.exe"
+        type: string
+
+concurrency:
+  group: jawal-full-pipeline
+  cancel-in-progress: false
+
+jobs:
+  stage-1-and-2-jawalos:
+    name: "1 Build JawalOS + 2 size/runtime gate"
+    runs-on: [self-hosted, Linux, X64, jawal-android-builder]
+    timeout-minutes: 720
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Stage 1 - verify Android builder capacity
+        run: |
+          chmod +x tools/check-android-builder.sh android/scripts/*.sh tools/*.sh
+          tools/check-android-builder.sh
+
+      - name: Stage 1 - build stripped Android 15 QPR2 JawalOS
+        env:
+          JAWAL_NATIVE_BRIDGE: ${{ inputs.native_bridge }}
+          JAWAL_BUILD_TYPE: userdebug
+          JAWAL_SERVICES_VARIANT: microg
+        run: android/scripts/sync-and-build.sh
+
+      - name: Stage 2 - package immutable system + sparse data template
+        run: android/scripts/package-runtime.sh dist/android/jawal-android.iso dist/android-runtime
+
+      - name: Stage 2 - publish measured size evidence
+        run: |
+          echo "### JawalOS measured artifacts" >> "$GITHUB_STEP_SUMMARY"
+          cat dist/android/image-size.txt >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          du -h dist/android/jawal-android.iso dist/android-runtime/images/*.qcow2 >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload JawalOS runtime
+        uses: actions/upload-artifact@v4
+        with:
+          name: jawalos-runtime
+          compression-level: 0
+          retention-days: 7
+          path: |
+            dist/android-runtime/**
+            dist/android/JawalSmokeApp.apk
+            dist/android/validation.txt
+            dist/android/largest-files.tsv
+            dist/android/build-metadata.txt
+            dist/android/image-size.txt
+
+  stage-3-package:
+    name: "3 Assemble Windows runtime + JawalSetup"
+    needs: stage-1-and-2-jawalos
+    runs-on: [self-hosted, Windows, X64, jawal-windows-builder]
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: jawalos-runtime
+          path: dist
+
+      - name: Build Jawal.exe Release
+        shell: pwsh
+        run: |
+          cmake -S host -B build/host -G "Visual Studio 17 2022" -A x64
+          cmake --build build/host --config Release --parallel
+
+      - name: Assemble QEMU + JawalOS runtime
+        shell: pwsh
+        run: |
+          ./packaging/assemble-windows-runtime.ps1 -QemuDir '${{ inputs.qemu_dir }}' -AndroidRuntimeDir 'dist/android-runtime' -OutputDir 'dist/runtime'
+          ./packaging/verify-runtime.ps1 -RuntimeDir 'dist/runtime'
+
+      - name: Assemble portable test layout
+        shell: pwsh
+        run: |
+          New-Item dist/portable -ItemType Directory -Force | Out-Null
+          Copy-Item build/host/Release/Jawal.exe dist/portable/Jawal.exe -Force
+          Copy-Item dist/runtime dist/portable/runtime -Recurse -Force
+
+      - name: Build single-file installer
+        shell: pwsh
+        run: ./packaging/build-installer.ps1 -Makensis '${{ inputs.makensis }}'
+
+      - name: Record installer size
+        shell: pwsh
+        run: |
+          $size = [Math]::Round((Get-Item dist/JawalSetup.exe).Length / 1MB, 1)
+          "### Stage 3`nJawalSetup.exe: **$size MiB**" | Add-Content $env:GITHUB_STEP_SUMMARY
+
+      - name: Upload packaged Jawal
+        uses: actions/upload-artifact@v4
+        with:
+          name: jawal-windows-package
+          compression-level: 0
+          retention-days: 7
+          path: |
+            dist/JawalSetup.exe
+            dist/portable/**
+            dist/android/JawalSmokeApp.apk
+            dist/reports/**
+
+  stage-4-runtime:
+    name: "4 WHPX boot/performance smoke"
+    needs: stage-3-package
+    runs-on: [self-hosted, Windows, X64, jawal-windows-hw]
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: jawal-windows-package
+          path: dist
+
+      - name: Boot Android and measure runtime
+        shell: pwsh
+        run: ./tools/windows-runtime-smoke.ps1 -JawalExe 'dist/portable/Jawal.exe' -TimeoutSeconds 180
+
+      - name: Upload runtime report
+        uses: actions/upload-artifact@v4
+        with:
+          name: jawal-stage4-report
+          path: dist/reports/windows-runtime-smoke.json
+
+  stage-5-functional:
+    name: "5 Android services + APK install smoke"
+    needs: stage-4-runtime
+    runs-on: [self-hosted, Windows, X64, jawal-windows-hw]
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: jawal-windows-package
+          path: dist
+
+      - name: Validate WebView/network/audio/phone/storage and PackageInstaller
+        shell: pwsh
+        run: |
+          ./tools/windows-functional-smoke.ps1 `
+            -JawalExe 'dist/portable/Jawal.exe' `
+            -SmokeApk 'dist/android/JawalSmokeApp.apk' `
+            -TimeoutSeconds 180
+
+      - name: Upload functional report
+        uses: actions/upload-artifact@v4
+        with:
+          name: jawal-stage5-report
+          path: dist/reports/windows-functional-smoke.json
