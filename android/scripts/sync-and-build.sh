@@ -4,11 +4,11 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 AOSP_DIR="${JAWAL_AOSP_DIR:-$ROOT/.work/android-src}"
 OUT_DIR="${JAWAL_ARTIFACTS_DIR:-$ROOT/dist/android}"
-RUNTIME_DIR="${JAWAL_RUNTIME_DIR:-$ROOT/dist/runtime}"
 MANIFEST_URL="https://github.com/BlissOS/platform_manifest.git"
-MANIFEST_BRANCH="${JAWAL_ANDROID_BRANCH:-voyager-x86}"
+MANIFEST_BRANCH="${JAWAL_ANDROID_BRANCH:-voyager-x86-qpr2}"
 BUILD_VARIANT="${JAWAL_SERVICES_VARIANT:-microg}"
 BUILD_TYPE="${JAWAL_BUILD_TYPE:-userdebug}"
+NATIVE_BRIDGE="${JAWAL_NATIVE_BRIDGE:-none}"
 LUNCH_TARGET="jawal_x86_64-ap4a-${BUILD_TYPE}"
 
 case "$BUILD_VARIANT" in
@@ -16,40 +16,59 @@ case "$BUILD_VARIANT" in
   *) echo "JAWAL_SERVICES_VARIANT must be vanilla or microg for the open build." >&2; exit 2 ;;
 esac
 
+case "$BUILD_TYPE" in
+  user|userdebug) ;;
+  *) echo "JAWAL_BUILD_TYPE must be user or userdebug." >&2; exit 2 ;;
+esac
+
+case "$NATIVE_BRIDGE" in
+  none|libndk) ;;
+  *) echo "JAWAL_NATIVE_BRIDGE must be none or libndk." >&2; exit 2 ;;
+esac
+
 for tool in git repo rsync python3 curl; do
   command -v "$tool" >/dev/null || { echo "Missing build tool: $tool" >&2; exit 2; }
 done
 
-mkdir -p "$AOSP_DIR" "$OUT_DIR" "$RUNTIME_DIR"
+mkdir -p "$AOSP_DIR" "$OUT_DIR"
 cd "$AOSP_DIR"
 
 if [[ ! -d .repo ]]; then
   repo init -u "$MANIFEST_URL" -b "$MANIFEST_BRANCH" --git-lfs
+else
+  current_manifest="$(git -C .repo/manifests rev-parse --abbrev-ref HEAD 2>/dev/null || true)"
+  if [[ "$current_manifest" != "$MANIFEST_BRANCH" ]]; then
+    repo init -u "$MANIFEST_URL" -b "$MANIFEST_BRANCH" --git-lfs
+  fi
 fi
 
-# Source is large; keep tags/history out of the working tree.
 repo sync -c --force-sync --no-tags --no-clone-bundle --optimized-fetch --prune -j"${JAWAL_SYNC_JOBS:-8}"
 
-# Overlay the Jawal product definitions into the checked-out Android tree.
 rm -rf device/jawal vendor/jawal
 mkdir -p device/jawal vendor/jawal
 rsync -a --delete "$ROOT/android/device/jawal/" device/jawal/
 rsync -a --delete "$ROOT/android/jawal-system/" vendor/jawal/jawal-system/
 rsync -a --delete "$ROOT/android/store/" vendor/jawal/store/
 
-# Fetch only the store APK used by the open flavor. It is signature-verified
-# against the publisher certificate before Soong is allowed to package it.
 export AOSP_DIR
 "$ROOT/tools/fetch-store.sh" "$AOSP_DIR/vendor/jawal/store/AuroraStore.apk"
 
-# Bliss' source tree supplies the optional microG product when requested.
-# microG is background compatibility plumbing; Jawal does not add extra user
-# applications from FOSS bundles.
 export BLISS_BUILD_VARIANT="$BUILD_VARIANT"
 
-# The runtime image is intentionally built as a phone-shaped x86_64 product.
-# First engineering passes use userdebug for diagnostics. Release packaging must
-# use a signed user build after all compatibility/performance gates pass.
+# ARM/ARM64 APK support is optional and deliberately not backed by blobs stored
+# in this repository. If a legally redistributable libndk_translation vendor
+# tree is provided in the source checkout, enable the upstream Android-x86 hook.
+unset USE_LIBNDK_TRANSLATION_NB
+if [[ "$NATIVE_BRIDGE" == "libndk" ]]; then
+  bridge_mk="vendor/google/emu-x86/target/libndk_translation.mk"
+  if [[ ! -f "$bridge_mk" ]]; then
+    echo "JAWAL_NATIVE_BRIDGE=libndk requested, but $bridge_mk is missing." >&2
+    echo "Provide the native-bridge vendor tree separately; Jawal does not redistribute proprietary/native-bridge blobs." >&2
+    exit 4
+  fi
+  export USE_LIBNDK_TRANSLATION_NB=true
+fi
+
 source build/envsetup.sh
 lunch "$LUNCH_TARGET"
 
@@ -65,17 +84,17 @@ fi
 
 cp -f "$ISO" "$OUT_DIR/jawal-android.iso"
 
-# Save a machine-readable package list and size report for the validation gate.
 find "$PRODUCT_OUT" -type f -printf '%s\t%p\n' | sort -nr > "$OUT_DIR/product-files.tsv"
 du -b "$OUT_DIR/jawal-android.iso" > "$OUT_DIR/image-size.txt"
 
+{
+  printf 'android_branch=%s\n' "$MANIFEST_BRANCH"
+  printf 'services_variant=%s\n' "$BUILD_VARIANT"
+  printf 'build_type=%s\n' "$BUILD_TYPE"
+  printf 'native_bridge=%s\n' "$NATIVE_BRIDGE"
+  printf 'lunch_target=%s\n' "$LUNCH_TARGET"
+} > "$OUT_DIR/build-metadata.txt"
+
 "$ROOT/tools/validate-product.sh" "$PRODUCT_OUT" "$OUT_DIR"
 
-# Convert the validated ISO output immediately into the immutable-system +
-# sparse-userdata layout consumed by Jawal.exe. The Windows app never presents
-# the Android-x86 installer UI to the user.
-rm -rf "$RUNTIME_DIR/android" "$RUNTIME_DIR/images"
-"$ROOT/android/scripts/package-runtime.sh" "$OUT_DIR/jawal-android.iso" "$RUNTIME_DIR"
-
-printf '\nJawal Android build complete:\n  ISO:     %s\n  Runtime: %s\n' \
-       "$OUT_DIR/jawal-android.iso" "$RUNTIME_DIR"
+printf '\nJawal Android build complete:\n  %s\n' "$OUT_DIR/jawal-android.iso"
