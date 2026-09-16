@@ -110,6 +110,7 @@ python3 "$ROOT/tools/analyze-jawalos-size.py" \
 } > "$OUT_DIR/build-metadata.txt"
 
 "$ROOT/tools/validate-product.sh" "$PRODUCT_OUT" "$OUT_DIR"
+bash "$ROOT/tools/validate-hardware-pruning.sh" "$PRODUCT_OUT" "$OUT_DIR"
 
 printf '\nJawal Android build complete:\n  %s\n  %s\n  %s\n  %s\n  %s\n' \
   "$OUT_DIR/jawal-android.iso" \
