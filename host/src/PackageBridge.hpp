@@ -29,6 +29,7 @@ PackageInstallResult InstallApk(const std::filesystem::path& apk);
 FileTransferResult SendFileToGuest(const std::filesystem::path& file);
 
 // Sends a small management command over Jawal's localhost-only control bridge.
-bool GuestControl(const std::string& command, std::string* response);
+// connectAttempts controls how long the caller is willing to wait for the guest.
+bool GuestControl(const std::string& command, std::string* response, int connectAttempts = 10);
 
 } // namespace jawal
