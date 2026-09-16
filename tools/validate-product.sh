@@ -12,15 +12,15 @@ warn() { printf 'WARN  %s\n' "$*" | tee -a "$REPORT"; }
 fail() { printf 'FAIL  %s\n' "$*" | tee -a "$REPORT"; FAILED=1; }
 FAILED=0
 
-# Exact package directories that must not ship in the minimal JawalOS image.
 BANNED_APPS=(
-  Aperture BlissUpdater BOSWallpapers Browser2 Calendar Camera2 Contacts
-  DeskClock Dialer Email Etar ExactCalculator Exchange2 Gallery2 GameSpace
-  Glimpse Jelly LiveWallpapers LiveWallpapersPicker messaging Music MusicFX
-  OmniJaws ParallelSpace QuickSearchBox Recorder Seedvault Stk Taskbar Twelve
-  WallpaperPicker2 Eleven CarrierConfigUI CellBroadcastReceiver
-  CellBroadcastService CellBroadcastApp EmergencyInfo MmsService SimAppDialog
-  ONS WAPPushManager NfcNci Tag ManagedProvisioning CompanionDeviceManager
+  Aperture BlissUpdater Updater SetupWizard LineageSetupWizard BOSWallpapers
+  Browser2 Calendar Camera2 Contacts DeskClock Dialer Email Etar ExactCalculator
+  Exchange2 Gallery2 GameSpace Glimpse Jelly LiveWallpapers LiveWallpapersPicker
+  messaging Music MusicFX OmniJaws ParallelSpace QuickSearchBox Recorder Seedvault
+  Stk Taskbar Twelve WallpaperPicker2 WallpaperBackup Eleven FMRadio FM2
+  CarrierConfigUI CarrierDefaultApp CellBroadcastReceiver CellBroadcastService
+  CellBroadcastApp EmergencyInfo MmsService SimAppDialog ONS WAPPushManager
+  NfcNci Tag SecureElement ManagedProvisioning CompanionDeviceManager
   DynamicSystemInstallationService MtpService OsuLogin SharedStorageBackup
   LocalTransport BackupRestoreConfirmation CaptivePortalLogin WifiDialog
   Development SampleLocationAttribution CtsShimPrebuilt CtsShimPrivPrebuilt
@@ -64,7 +64,7 @@ require_path() {
   if [[ -n "$found" ]]; then pass "$label -> ${found#$PRODUCT_OUT/}"; else fail "$label missing"; fi
 }
 
-# Compatibility/quality core: these are deliberately protected from size cuts.
+# Protected compatibility/quality core. Size optimization may not remove these.
 require_path "ART app_process64" '*/bin/app_process64'
 require_path "SurfaceFlinger" '*/bin/surfaceflinger'
 require_path "Android framework" '*/framework/framework.jar'
@@ -102,6 +102,20 @@ for feature in \
     fail "Unsupported hardware feature declaration still present: $feature"
   else
     pass "Unsupported hardware feature declaration removed: $feature"
+  fi
+done
+
+# Stock audio catalogue is intentionally reduced, but audio quality/codec stack
+# remains untouched. Keep only a tiny default selection.
+require_path "Default ringtone" '*/media/audio/ringtones/Ring_Synth_04.ogg'
+require_path "Default alarm" '*/media/audio/alarms/Alarm_Classic.ogg'
+require_path "Default notification" '*/media/audio/notifications/pixiedust.ogg' '*/media/audio/notifications/OnTheHunt.ogg'
+for category in alarms notifications ringtones; do
+  count="$(find "$PRODUCT_OUT" -path "*/media/audio/$category/*.ogg" -type f | wc -l)"
+  if (( count > 3 )); then
+    fail "Too many stock $category sounds remain: $count"
+  else
+    pass "Minimal $category sound set: $count"
   fi
 done
 
