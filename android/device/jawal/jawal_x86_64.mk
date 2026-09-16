@@ -21,6 +21,7 @@ $(call inherit-product, device/generic/common/x86_64.mk)
 # VM hardware helpers only after the upstream x86 device layer declares them.
 $(call inherit-product, device/jawal/prune.mk)
 $(call inherit-product, device/jawal/prune-hardware.mk)
+$(call inherit-product, device/jawal/prune-copyfiles.mk)
 
 PRODUCT_NAME := jawal_x86_64
 PRODUCT_DEVICE := x86_64
