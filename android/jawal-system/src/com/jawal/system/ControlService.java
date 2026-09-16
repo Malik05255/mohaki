@@ -70,6 +70,7 @@ public final class ControlService extends Service {
 
     private String handleCommand(String command) {
         if ("PING".equals(command)) return "OK PONG";
+        if ("GPU_RESULT".equals(command)) return "OK " + GpuProbeService.getResultJson();
         if ("RESET_ARM64".equals(command)) {
             arm64Result.set(0);
             return "OK";
