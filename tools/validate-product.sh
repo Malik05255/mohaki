@@ -12,38 +12,42 @@ warn() { printf 'WARN  %s\n' "$*" | tee -a "$REPORT"; }
 fail() { printf 'FAIL  %s\n' "$*" | tee -a "$REPORT"; FAILED=1; }
 FAILED=0
 
-# Exact module directory names. Providers with similar names (for example
-# CalendarProvider / ContactsProvider) are intentionally allowed because third
-# party applications use their public framework contracts.
+# Exact package directories that must not ship in the minimal JawalOS image.
 BANNED_APPS=(
   Aperture BlissUpdater BOSWallpapers Browser2 Calendar Camera2 Contacts
   DeskClock Dialer Email Etar ExactCalculator Exchange2 Gallery2 GameSpace
   Glimpse Jelly LiveWallpapers LiveWallpapersPicker messaging Music MusicFX
   OmniJaws ParallelSpace QuickSearchBox Recorder Seedvault Stk Taskbar Twelve
-  WallpaperPicker2 Eleven
+  WallpaperPicker2 Eleven CarrierConfigUI CellBroadcastReceiver
+  CellBroadcastService CellBroadcastApp EmergencyInfo MmsService SimAppDialog
+  ONS WAPPushManager NfcNci Tag ManagedProvisioning CompanionDeviceManager
+  DynamicSystemInstallationService MtpService OsuLogin SharedStorageBackup
+  LocalTransport BackupRestoreConfirmation CaptivePortalLogin Tethering
+  WifiDialog Development SampleLocationAttribution CtsShimPrebuilt
+  CtsShimPrivPrebuilt EmulatedCamera
 )
 
 for app in "${BANNED_APPS[@]}"; do
   if find "$PRODUCT_OUT" -type d -name "$app" -print -quit | grep -q .; then
-    fail "Bundled app still present: $app"
+    fail "Unused package still present: $app"
   else
-    pass "Removed bundled app: $app"
+    pass "Removed unused package: $app"
   fi
 done
 
-# These utilities are useful on bare-metal Android-x86 distributions, but Jawal
-# always boots a fixed QEMU virtual machine and must not pay their runtime/image cost.
 BANNED_FILES=(
   '*/bin/sshd' '*/bin/htop' '*/bin/nano' '*/bin/vim' '*/bin/tcpdump'
   '*/bin/ntfs-3g' '*/bin/mkntfs' '*/bin/dmidecode' '*/bin/lspci'
   '*/bin/thermal-daemon' '*/bin/hcitool'
+  '*/bin/hw/android.hardware.camera.provider.ranchu'
+  '*/bin/hw/android.hardware.camera.provider.ranchu_minigbm'
 )
 
 for pattern in "${BANNED_FILES[@]}"; do
   if find "$PRODUCT_OUT" -path "$pattern" -print -quit | grep -q .; then
-    fail "Bare-metal utility still present: $pattern"
+    fail "Unused bare-metal/hardware file still present: $pattern"
   else
-    pass "Removed bare-metal utility: $pattern"
+    pass "Removed unused bare-metal/hardware file: $pattern"
   fi
 done
 
@@ -57,16 +61,25 @@ require_path() {
   if [[ -n "$found" ]]; then pass "$label -> ${found#$PRODUCT_OUT/}"; else fail "$label missing"; fi
 }
 
-# Compatibility-critical runtime pieces. Do not trade these away for size.
+# Compatibility/quality core: these are deliberately protected from size cuts.
 require_path "ART app_process64" '*/bin/app_process64'
 require_path "SurfaceFlinger" '*/bin/surfaceflinger'
 require_path "Android framework" '*/framework/framework.jar'
 require_path "SystemUI" '*/SystemUI*'
+require_path "Launcher" '*/Launcher3*' '*/Trebuchet*' '*/Quickstep*'
 require_path "Settings" '*/Settings*'
 require_path "PermissionController" '*/PermissionController*'
 require_path "WebView implementation" '*/WebView*' '*/webview*'
-require_path "Media framework" '*/bin/mediaserver' '*/bin/media.swcodec' '*/lib64/libstagefright*'
+require_path "Media framework/codecs" '*/bin/mediaserver' '*/bin/media.swcodec' '*/lib64/libstagefright*'
+require_path "Audio server" '*/bin/audioserver'
 require_path "Package installer" '*/PackageInstaller*' '*/PackageInstallerService*'
+require_path "Documents UI" '*/DocumentsUI*'
+require_path "Download provider" '*/DownloadProvider*'
+require_path "Network service" '*/bin/netd'
+require_path "NetworkStack" '*/NetworkStack*' '*/com.android.tethering*'
+require_path "Storage daemon" '*/bin/vold'
+require_path "Keystore" '*/bin/keystore2'
+require_path "Input method" '*/LatinIME*' '*/InputMethod*'
 require_path "ext4 recovery/fsck" '*/bin/e2fsck'
 require_path "Jawal system bridge" '*/JawalSystemBridge*'
 require_path "Jawal Store" '*/JawalStore*'
@@ -78,23 +91,33 @@ else
   pass "Tablet core feature declaration removed"
 fi
 
-find "$PRODUCT_OUT" -type f -printf '%s\t%p\n' | sort -nr | head -n 100 > "$REPORT_DIR/largest-files.tsv"
+for feature in \
+  '*/etc/permissions/android.hardware.camera*.xml' \
+  '*/etc/permissions/android.hardware.nfc*.xml'; do
+  if find "$PRODUCT_OUT" -path "$feature" -print -quit | grep -q .; then
+    fail "Unsupported hardware feature declaration still present: $feature"
+  else
+    pass "Unsupported hardware feature declaration removed: $feature"
+  fi
+done
+
+find "$PRODUCT_OUT" -type f -printf '%s\t%p\n' | sort -nr | head -n 150 > "$REPORT_DIR/largest-files.tsv"
 
 ISO="${REPORT_DIR}/jawal-android.iso"
 if [[ -f "$ISO" ]]; then
   bytes="$(stat -c '%s' "$ISO")"
   mib=$(( (bytes + 1048575) / 1048576 ))
   printf 'INFO  compressed ISO size: %s MiB\n' "$mib" | tee -a "$REPORT"
-  if (( mib <= 700 )); then
-    pass "Initial compressed-image target <= 700 MiB"
-  elif (( mib <= 1100 )); then
-    warn "Image is above the 700 MiB stretch target; optimize using largest-files.tsv, not blind framework deletion"
+  if (( mib <= 650 )); then
+    pass "Aggressive compressed-image target <= 650 MiB"
+  elif (( mib <= 900 )); then
+    warn "Image is above 650 MiB; continue measured pruning from largest-files.tsv"
   else
-    warn "Image is > 1.1 GiB and needs another measured pruning pass"
+    warn "Image is > 900 MiB; another measured pruning pass is required"
   fi
 
-  if [[ "${JAWAL_STRICT_SIZE:-0}" == "1" && $mib -gt 1100 ]]; then
-    fail "Strict image budget exceeded (1100 MiB)"
+  if [[ "${JAWAL_STRICT_SIZE:-0}" == "1" && $mib -gt 1000 ]]; then
+    fail "Strict production image budget exceeded (1000 MiB)"
   fi
 fi
 
@@ -103,4 +126,4 @@ if (( FAILED != 0 )); then
   exit 1
 fi
 
-pass "Static product compatibility gate complete"
+pass "Aggressive pruning + compatibility quality gate complete"
