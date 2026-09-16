@@ -180,8 +180,6 @@ JAWAL_REMOVE_PACKAGES := \
     efibootmgr \
     x86_dhcpclient.recovery
 
-# ADB is useful during bring-up, but it is not part of the shipping Jawal user
-# experience. Keep it in userdebug diagnostics; omit it from production user builds.
 ifeq ($(TARGET_BUILD_VARIANT),user)
 JAWAL_REMOVE_PACKAGES += adbd
 endif
@@ -189,10 +187,6 @@ endif
 PRODUCT_PACKAGES := $(filter-out $(JAWAL_REMOVE_PACKAGES),$(PRODUCT_PACKAGES))
 PRODUCT_PACKAGES_DEBUG := $(filter-out $(JAWAL_REMOVE_PACKAGES),$(PRODUCT_PACKAGES_DEBUG))
 
-# Camera APIs remain in framework for application compatibility, but Jawal v1
-# has no camera passthrough. Also remove unsupported NFC/UWB feature declarations.
-# The audio engine/codecs are preserved; only the large stock sound catalogue is
-# reduced to one ringtone, notification and alarm sound.
 PRODUCT_COPY_FILES := $(filter-out \
     %/android.hardware.camera.xml:% \
     %/android.hardware.camera.front.xml:% \
@@ -213,18 +207,10 @@ PRODUCT_COPY_FILES += \
     frameworks/native/data/etc/handheld_core_hardware.xml:$(TARGET_COPY_OUT_VENDOR)/etc/permissions/handheld_core_hardware.xml \
     frameworks/base/data/sounds/Alarm_Classic.ogg:$(TARGET_COPY_OUT_PRODUCT)/media/audio/alarms/Alarm_Classic.ogg \
     frameworks/base/data/sounds/notifications/pixiedust.ogg:$(TARGET_COPY_OUT_PRODUCT)/media/audio/notifications/pixiedust.ogg \
+    frameworks/base/data/sounds/newwavelabs/OnTheHunt.ogg:$(TARGET_COPY_OUT_PRODUCT)/media/audio/notifications/OnTheHunt.ogg \
     frameworks/base/data/sounds/Ring_Synth_04.ogg:$(TARGET_COPY_OUT_PRODUCT)/media/audio/ringtones/Ring_Synth_04.ogg
 
-# Windows/Jawal owns runtime updates and full-device backup. Android-side OTA,
-# DSU, Seedvault/local backup transports, printing and MTP are deliberately out.
 PRODUCT_BUILD_GENERIC_OTA_PACKAGE := false
-
-# Strip Java local-variable and dexpreopt mini-debug metadata. This preserves
-# stack-trace source/line information and has no effect on rendering, codecs,
-# application execution or runtime performance.
 PRODUCT_MINIMIZE_JAVA_DEBUG_INFO := true
 WITH_DEXPREOPT_DEBUG_INFO := false
-
-# App resource/layout selection should behave as a phone even though the
-# underlying PC support originated from Android-x86 targets.
 PRODUCT_CHARACTERISTICS := phone
