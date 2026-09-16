@@ -27,7 +27,6 @@ Require-File (Join-Path $androidRoot "android\kernel") "Jawal Android kernel"
 Require-File (Join-Path $androidRoot "android\initrd.img") "Jawal Android initrd"
 Require-File (Join-Path $androidRoot "images\jawal-system.qcow2") "Jawal system disk"
 Require-File (Join-Path $androidRoot "images\jawal-data-template.qcow2") "Jawal data template"
-Require-File (Join-Path $androidRoot "runtime.sha256") "Jawal runtime integrity manifest"
 
 if (Test-Path $output) {
     Remove-Item $output -Recurse -Force
@@ -38,7 +37,6 @@ New-Item (Join-Path $output "firmware") -ItemType Directory | Out-Null
 
 Copy-Item (Join-Path $androidRoot "android") $output -Recurse
 Copy-Item (Join-Path $androidRoot "images") $output -Recurse
-Copy-Item (Join-Path $androidRoot "runtime.sha256") $output
 
 # QEMU's Windows build needs several runtime DLLs beside the executable. Copy
 # only runtime files, never development headers/import libraries.
@@ -77,8 +75,33 @@ foreach ($name in $licenseCandidates) {
 Require-File (Join-Path $output "qemu\qemu-system-x86_64.exe") "Packaged QEMU"
 Require-File (Join-Path $output "qemu\qemu-img.exe") "Packaged qemu-img"
 
+# Regenerate the manifest *after* Windows QEMU files are assembled. Jawal.exe
+# verifies this manifest on every launch before starting Android.
+$critical = @(
+    "android\kernel",
+    "android\initrd.img",
+    "images\jawal-system.qcow2",
+    "images\jawal-data-template.qcow2",
+    "qemu\qemu-system-x86_64.exe",
+    "qemu\qemu-img.exe"
+)
+if (Test-Path (Join-Path $output "firmware\edk2-x86_64-code.fd")) {
+    $critical += "firmware\edk2-x86_64-code.fd"
+}
+$critical += @(Get-ChildItem (Join-Path $output "qemu") -Filter *.dll -File | ForEach-Object { "qemu\$($_.Name)" })
+
+$manifest = Join-Path $output "runtime.sha256"
+$lines = foreach ($relative in ($critical | Sort-Object -Unique)) {
+    $path = Join-Path $output $relative
+    Require-File $path "Runtime integrity file"
+    $hash = (Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash.ToLowerInvariant()
+    "$hash  $($relative.Replace('\','/'))"
+}
+$lines | Set-Content -LiteralPath $manifest -Encoding ascii
+
 $files = Get-ChildItem $output -Recurse -File
 $totalBytes = ($files | Measure-Object Length -Sum).Sum
 $sizeMiB = [Math]::Round($totalBytes / 1MB, 1)
 Write-Host "Jawal Windows runtime assembled: $sizeMiB MiB"
+Write-Host "Integrity manifest entries: $($lines.Count)"
 Write-Host $output
