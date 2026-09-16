@@ -20,10 +20,16 @@ jobs:
             'packaging/assemble-windows-runtime.ps1',
             'packaging/build-installer.ps1',
             'packaging/verify-runtime.ps1',
+            'packaging/sign-release.ps1',
+            'packaging/release-gate.ps1',
             'tools/probe-guest.ps1',
             'tools/install-smoke-apk.ps1',
             'tools/windows-runtime-smoke.ps1',
-            'tools/windows-functional-smoke.ps1'
+            'tools/windows-functional-smoke.ps1',
+            'tools/windows-apk-matrix.ps1',
+            'tools/windows-arm64-smoke.ps1',
+            'tools/windows-factory-reset-smoke.ps1',
+            'tools/windows-resilience-smoke.ps1'
           )) {
             $tokens = $null
             $errors = $null
@@ -38,11 +44,13 @@ jobs:
         run: cmake -S host -B build/host -G "Visual Studio 17 2022" -A x64
       - name: Build Jawal host
         run: cmake --build build/host --config Release --parallel
-      - name: Upload host binary
+      - name: Upload host binaries
         uses: actions/upload-artifact@v4
         with:
           name: jawal-host-windows-x64
-          path: build/host/Release/Jawal.exe
+          path: |
+            build/host/Release/Jawal.exe
+            build/host/Release/JawalPkg.exe
 
   scripts:
     runs-on: ubuntu-latest
@@ -55,3 +63,4 @@ jobs:
           bash -n tools/check-android-builder.sh
           bash -n tools/fetch-store.sh
           bash -n tools/validate-product.sh
+          bash -n tools/build-arm64-smoke.sh
