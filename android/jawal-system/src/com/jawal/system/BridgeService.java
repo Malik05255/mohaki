@@ -15,6 +15,7 @@ import android.net.NetworkCapabilities;
 import android.os.Build;
 import android.os.IBinder;
 import android.os.StatFs;
+import android.os.SystemProperties;
 import android.util.Log;
 import android.webkit.WebView;
 
@@ -141,11 +142,14 @@ public final class BridgeService extends Service {
             abis.append(Build.SUPPORTED_ABIS[index]);
         }
 
+        final String nativeBridge = SystemProperties.get("ro.dalvik.vm.native.bridge", "0");
+
         return "{" +
                 "\"ready\":true," +
                 "\"sdk\":" + Build.VERSION.SDK_INT + "," +
                 "\"release\":\"" + escapeJson(Build.VERSION.RELEASE) + "\"," +
                 "\"abis\":\"" + escapeJson(abis.toString()) + "\"," +
+                "\"nativeBridge\":\"" + escapeJson(nativeBridge) + "\"," +
                 "\"webview\":\"" + escapeJson(webViewPackage) + "\"," +
                 "\"networkInternet\":" + networkInternet + "," +
                 "\"networkValidated\":" + networkValidated + "," +
@@ -166,8 +170,6 @@ public final class BridgeService extends Service {
              DataInputStream input = new DataInputStream(new BufferedInputStream(client.getInputStream()));
              DataOutputStream output = new DataOutputStream(new BufferedOutputStream(client.getOutputStream()))) {
 
-            // QEMU user-mode host forwarding enters the guest from 10.0.2.2.
-            // Reject guest-local clients: this service has privileged install rights.
             final String source = client.getInetAddress().getHostAddress();
             if (!"10.0.2.2".equals(source)) {
                 Log.w(TAG, "Rejected bridge connection from " + source);
