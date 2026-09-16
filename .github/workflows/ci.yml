@@ -26,6 +26,7 @@ jobs:
             'tools/install-smoke-apk.ps1',
             'tools/windows-runtime-smoke.ps1',
             'tools/windows-gpu-smoke.ps1',
+            'tools/windows-quick-resume-smoke.ps1',
             'tools/windows-functional-smoke.ps1',
             'tools/windows-apk-matrix.ps1',
             'tools/windows-arm64-smoke.ps1',
