@@ -29,20 +29,73 @@ cat > "$work/AndroidManifest.xml" <<'EOF'
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
     package="com.jawal.arm64smoke">
     <uses-sdk android:minSdkVersion="23" android:targetSdkVersion="35" />
-    <application android:hasCode="false" android:label="Jawal ARM64 Smoke" />
+    <uses-permission android:name="android.permission.INTERNET" />
+    <application
+        android:allowBackup="false"
+        android:extractNativeLibs="true"
+        android:hasCode="false"
+        android:label="Jawal ARM64 Smoke">
+        <activity
+            android:name="android.app.NativeActivity"
+            android:exported="true"
+            android:screenOrientation="portrait">
+            <meta-data android:name="android.app.lib_name" android:value="jawalarm64smoke" />
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+    </application>
 </manifest>
 EOF
 
 cat > "$work/probe.c" <<'EOF'
-__attribute__((visibility("default"))) int jawal_arm64_probe(void) { return 42; }
+#include <android/native_activity.h>
+#include <arpa/inet.h>
+#include <stdint.h>
+#include <string.h>
+#include <sys/socket.h>
+#include <unistd.h>
+
+#define JAWAL_ARM64_MAGIC 0x4A415236u
+#define JAWAL_ARM64_PORT 27187
+
+static void report_result(int result) {
+    int fd = socket(AF_INET, SOCK_STREAM, 0);
+    if (fd < 0) return;
+
+    struct sockaddr_in address;
+    memset(&address, 0, sizeof(address));
+    address.sin_family = AF_INET;
+    address.sin_port = htons(JAWAL_ARM64_PORT);
+    address.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+
+    if (connect(fd, (struct sockaddr*)&address, sizeof(address)) == 0) {
+        uint32_t payload[2];
+        payload[0] = htonl(JAWAL_ARM64_MAGIC);
+        payload[1] = htonl((uint32_t)result);
+        (void)send(fd, payload, sizeof(payload), 0);
+    }
+    close(fd);
+}
+
+__attribute__((visibility("default")))
+void ANativeActivity_onCreate(ANativeActivity* activity, void* saved_state, size_t saved_state_size) {
+    (void)saved_state;
+    (void)saved_state_size;
+    report_result(42);
+    ANativeActivity_finish(activity);
+}
 EOF
 
 "$CLANG" \
-  --target=aarch64-linux-android35 \
-  -shared -fPIC -nostdlib \
+  --target=aarch64-linux-android23 \
+  -shared -fPIC \
   -Wl,-soname,libjawalarm64smoke.so \
+  -Wl,--no-undefined \
   -o "$work/lib/arm64-v8a/libjawalarm64smoke.so" \
-  "$work/probe.c"
+  "$work/probe.c" \
+  -landroid
 
 "$AAPT2" link \
   -I "$ANDROID_JAR" \
@@ -62,4 +115,4 @@ EOF
 
 "$APKSIGNER" verify --verbose "$OUT_APK"
 
-echo "Built ARM64-only smoke APK: $OUT_APK"
+echo "Built executable ARM64-only NativeActivity smoke APK: $OUT_APK"
