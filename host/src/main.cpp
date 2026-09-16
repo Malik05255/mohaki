@@ -21,8 +21,8 @@ constexpr int kInitialWidth = 450;
 constexpr int kInitialHeight = 800;
 constexpr UINT kStartRuntimeMessage = WM_APP + 1;
 constexpr UINT kInstallCompleteMessage = WM_APP + 2;
-constexpr UINT kMenuSettings = 0x1101;
-constexpr UINT kMenuFactoryReset = 0x1102;
+constexpr UINT kMenuSettings = 0x1100;
+constexpr UINT kMenuFactoryReset = 0x1110;
 
 struct InstallCompletion {
     jawal::PackageInstallResult result;
