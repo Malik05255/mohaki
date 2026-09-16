@@ -1,4 +1,5 @@
 #include "PackageBridge.hpp"
+#include "RuntimeSettings.hpp"
 #include "VmController.hpp"
 
 #include <dwmapi.h>
@@ -6,6 +7,7 @@
 #include <shlobj.h>
 #include <windows.h>
 
+#include <algorithm>
 #include <filesystem>
 #include <string>
 #include <thread>
@@ -14,6 +16,7 @@
 namespace {
 
 constexpr wchar_t kWindowClass[] = L"JawalPhoneWindow";
+constexpr wchar_t kSingleInstanceMutex[] = L"Local\\Jawal.SingleInstance";
 constexpr int kInitialWidth = 450;
 constexpr int kInitialHeight = 800;
 constexpr UINT kStartRuntimeMessage = WM_APP + 1;
@@ -26,6 +29,7 @@ struct InstallCompletion {
 
 jawal::VmController gVm;
 HWND gRenderHost = nullptr;
+HANDLE gSingleInstance = nullptr;
 
 std::filesystem::path ModuleDirectory() {
     std::vector<wchar_t> buffer(32768);
@@ -77,6 +81,25 @@ bool EnsureDataOverlay(const std::filesystem::path& runtime,
     return RunHiddenAndWait(command, runtime);
 }
 
+bool WhpxReady(std::wstring* reason) {
+    if (!IsProcessorFeaturePresent(PF_VIRT_FIRMWARE_ENABLED)) {
+        if (reason) {
+            *reason = L"المحاكاة الافتراضية غير مفعلة من BIOS/UEFI. فعّل Intel VT-x أو AMD-V ثم أعد تشغيل Windows.";
+        }
+        return false;
+    }
+
+    HMODULE whpx = LoadLibraryExW(L"WinHvPlatform.dll", nullptr, LOAD_LIBRARY_SEARCH_SYSTEM32);
+    if (!whpx) {
+        if (reason) {
+            *reason = L"Windows Hypervisor Platform غير متاح. فعّل Windows Hypervisor Platform من ميزات Windows.";
+        }
+        return false;
+    }
+    FreeLibrary(whpx);
+    return true;
+}
+
 void ResizeEmbeddedSurface(HWND renderHost) {
     if (!renderHost) return;
     RECT rc{};
@@ -88,12 +111,44 @@ void ResizeEmbeddedSurface(HWND renderHost) {
     }
 }
 
+unsigned AutomaticCpuCores(unsigned logicalProcessors) {
+    if (logicalProcessors >= 12) return 6;
+    if (logicalProcessors >= 8) return 4;
+    if (logicalProcessors >= 4) return 2;
+    return 1;
+}
+
+unsigned MaximumCpuCores(unsigned logicalProcessors) {
+    if (logicalProcessors <= 2) return 1;
+    return std::max(1u, std::min(8u, logicalProcessors - 2));
+}
+
+unsigned AutomaticMemoryMb(unsigned totalMb) {
+    if (totalMb >= 32768) return 8192;
+    if (totalMb >= 24576) return 6144;
+    if (totalMb >= 12288) return 4096;
+    return 3072;
+}
+
+unsigned MaximumMemoryMb(unsigned totalMb) {
+    const unsigned reserve = totalMb >= 16384 ? 4096u : 3072u;
+    if (totalMb <= reserve + 2048u) return 2048u;
+    return std::min(12288u, totalMb - reserve);
+}
+
 void StartRuntime(HWND owner) {
+    std::wstring virtualizationError;
+    if (!WhpxReady(&virtualizationError)) {
+        MessageBoxW(owner, virtualizationError.c_str(), L"جوال", MB_OK | MB_ICONERROR | MB_RTLREADING);
+        return;
+    }
+
     const auto root = ModuleDirectory();
     const auto runtime = root / L"runtime";
+    const auto dataDirectory = LocalDataDirectory();
     const auto systemDisk = runtime / L"images" / L"jawal-system.qcow2";
     const auto dataTemplate = runtime / L"images" / L"jawal-data-template.qcow2";
-    const auto userData = LocalDataDirectory() / L"data.qcow2";
+    const auto userData = dataDirectory / L"data.qcow2";
 
     if (!std::filesystem::exists(systemDisk) ||
         !EnsureDataOverlay(runtime, dataTemplate, userData)) {
@@ -103,21 +158,32 @@ void StartRuntime(HWND owner) {
         return;
     }
 
+    SYSTEM_INFO info{};
+    GetSystemInfo(&info);
+    const unsigned logicalProcessors = std::max(1u, static_cast<unsigned>(info.dwNumberOfProcessors));
+
+    MEMORYSTATUSEX memory{};
+    memory.dwLength = sizeof(memory);
+    GlobalMemoryStatusEx(&memory);
+    const unsigned totalMb = static_cast<unsigned>(memory.ullTotalPhys / (1024ull * 1024ull));
+
+    const auto settings = jawal::LoadRuntimeSettings(dataDirectory);
+    const unsigned automaticCpu = AutomaticCpuCores(logicalProcessors);
+    const unsigned maximumCpu = MaximumCpuCores(logicalProcessors);
+    const unsigned automaticRam = AutomaticMemoryMb(totalMb);
+    const unsigned maximumRam = MaximumMemoryMb(totalMb);
+
     jawal::VmConfig config{};
     config.qemuExe = runtime / L"qemu" / L"qemu-system-x86_64.exe";
     config.runtimeDir = runtime;
     config.systemDisk = systemDisk;
     config.dataDisk = userData;
-
-    SYSTEM_INFO info{};
-    GetSystemInfo(&info);
-    config.cpuCores = info.dwNumberOfProcessors >= 8 ? 4 : 2;
-
-    MEMORYSTATUSEX memory{};
-    memory.dwLength = sizeof(memory);
-    GlobalMemoryStatusEx(&memory);
-    const auto totalMb = static_cast<unsigned>(memory.ullTotalPhys / (1024ull * 1024ull));
-    config.memoryMb = totalMb >= 24576 ? 6144 : (totalMb >= 12288 ? 4096 : 3072);
+    config.cpuCores = settings.cpuCores == 0
+        ? automaticCpu
+        : std::clamp(settings.cpuCores, 1u, maximumCpu);
+    config.memoryMb = settings.memoryMb == 0
+        ? std::min(automaticRam, maximumRam)
+        : std::clamp(settings.memoryMb, 2048u, maximumRam);
 
     std::wstring error;
     if (!gVm.Start(gRenderHost, config, &error)) {
@@ -195,6 +261,18 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
 int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int showCommand) {
     SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
 
+    gSingleInstance = CreateMutexW(nullptr, TRUE, kSingleInstanceMutex);
+    if (!gSingleInstance) return 1;
+    if (GetLastError() == ERROR_ALREADY_EXISTS) {
+        if (HWND existing = FindWindowW(kWindowClass, L"جوال")) {
+            ShowWindow(existing, SW_RESTORE);
+            SetForegroundWindow(existing);
+        }
+        CloseHandle(gSingleInstance);
+        gSingleInstance = nullptr;
+        return 0;
+    }
+
     WNDCLASSEXW wc{};
     wc.cbSize = sizeof(wc);
     wc.hInstance = instance;
@@ -202,7 +280,7 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int showCommand) {
     wc.lpszClassName = kWindowClass;
     wc.hCursor = LoadCursorW(nullptr, IDC_ARROW);
     wc.hbrBackground = reinterpret_cast<HBRUSH>(GetStockObject(BLACK_BRUSH));
-    if (!RegisterClassExW(&wc)) return 1;
+    if (!RegisterClassExW(&wc)) return 2;
 
     RECT desktop{};
     SystemParametersInfoW(SPI_GETWORKAREA, 0, &desktop, 0);
@@ -216,7 +294,7 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int showCommand) {
         WS_OVERLAPPEDWINDOW | WS_CLIPCHILDREN,
         x, y, kInitialWidth, kInitialHeight,
         nullptr, nullptr, instance, nullptr);
-    if (!hwnd) return 2;
+    if (!hwnd) return 3;
 
     constexpr DWORD DWMWA_WINDOW_CORNER_PREFERENCE_LOCAL = 33;
     constexpr int DWMWCP_ROUND = 2;
@@ -230,6 +308,12 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int showCommand) {
     while (GetMessageW(&message, nullptr, 0, 0) > 0) {
         TranslateMessage(&message);
         DispatchMessageW(&message);
+    }
+
+    if (gSingleInstance) {
+        ReleaseMutex(gSingleInstance);
+        CloseHandle(gSingleInstance);
+        gSingleInstance = nullptr;
     }
     return static_cast<int>(message.wParam);
 }
