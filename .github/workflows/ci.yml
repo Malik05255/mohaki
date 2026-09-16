@@ -25,6 +25,7 @@ jobs:
             'tools/probe-guest.ps1',
             'tools/install-smoke-apk.ps1',
             'tools/windows-runtime-smoke.ps1',
+            'tools/windows-gpu-smoke.ps1',
             'tools/windows-functional-smoke.ps1',
             'tools/windows-apk-matrix.ps1',
             'tools/windows-arm64-smoke.ps1',
@@ -56,7 +57,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Parse shell build scripts
+      - name: Parse shell and Python build tooling
         run: |
           bash -n android/scripts/sync-and-build.sh
           bash -n android/scripts/package-runtime.sh
@@ -64,3 +65,4 @@ jobs:
           bash -n tools/fetch-store.sh
           bash -n tools/validate-product.sh
           bash -n tools/build-arm64-smoke.sh
+          python3 -m py_compile tools/analyze-jawalos-size.py
