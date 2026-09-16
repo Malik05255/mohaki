@@ -14,9 +14,51 @@ CATEGORIES = {
     "firmware": ("/firmware/", "/vendor/firmware/"),
 }
 
+# Never recommend deleting these merely for size. They directly affect app
+# compatibility, rendering/media quality, security, networking, storage or input.
+PROTECTED_TOKENS = (
+    "webview", "trichrome", "framework.jar", "services.jar", "app_process",
+    "surfaceflinger", "systemui", "permissioncontroller", "packageinstaller",
+    "documentsui", "downloadprovider", "audioserver", "audioflinger",
+    "mediacodec", "media.swcodec", "stagefright", "codec2", "ffmpeg",
+    "vulkan", "egl", "gles", "mesa", "virgl", "minigbm", "libdrm",
+    "netd", "networkstack", "tethering", "dnsresolver", "keystore", "keymint",
+    "gatekeeper", "vold", "storagemanager", "latinime", "inputmethod",
+    "e2fsck", "fsck.ext4", "selinux", "sepolicy", "zygote", "libart",
+    "libbinder", "libc.so", "libdl.so", "libm.so", "liblog.so",
+    "jawalsystembridge", "jawalstore", "handheld_core_hardware",
+)
+
+# Strong candidates: content, diagnostics and physical-hardware helpers Jawal
+# deliberately does not expose. These still require validator/boot evidence.
+SAFE_HINT_TOKENS = (
+    "wallpaper", "ringtone", "notification", "alarm", "sample", "demo",
+    "benchmark", "trace", "debug", "test", "recovery", "setupwizard",
+    "updater", "print", "nfc", "uwb", "satellite", "camera.provider",
+    "emulatedcamera", "fastboot", "simpleperf", "strace", "heapprofd",
+    "microdroid", "virtualizationservice", "/vm_shell", "/vm",
+)
+
+# Potentially removable but more likely to have indirect app dependencies.
+REVIEW_HINT_TOKENS = (
+    "dictionary", "tts", "emoji", "fonts", "locale", "hyph", "firmware",
+    "bluetooth", "location", "sensor", "backup", "companion", "provision",
+)
+
 
 def mib(value: int) -> float:
     return round(value / 1024 / 1024, 2)
+
+
+def classify(path: str) -> str:
+    lower = path.lower().replace("\\", "/")
+    if any(token in lower for token in PROTECTED_TOKENS):
+        return "protected"
+    if any(token in lower for token in SAFE_HINT_TOKENS):
+        return "safe_candidate"
+    if any(token in lower for token in REVIEW_HINT_TOKENS):
+        return "review_candidate"
+    return "unknown"
 
 
 def main() -> int:
@@ -24,7 +66,8 @@ def main() -> int:
     parser.add_argument("product_files")
     parser.add_argument("--output", default="dist/android/size-analysis.json")
     parser.add_argument("--markdown", default="dist/android/size-analysis.md")
-    parser.add_argument("--top", type=int, default=80)
+    parser.add_argument("--plan", default="dist/android/pruning-plan.md")
+    parser.add_argument("--top", type=int, default=100)
     args = parser.parse_args()
 
     rows = []
@@ -37,6 +80,8 @@ def main() -> int:
 
     category_bytes = {name: 0 for name in CATEGORIES}
     category_bytes["other"] = 0
+    risk_bytes = {"protected": 0, "safe_candidate": 0, "review_candidate": 0, "unknown": 0}
+
     for size, path in rows:
         lower = path.lower().replace("\\", "/")
         matched = False
@@ -47,35 +92,48 @@ def main() -> int:
                 break
         if not matched:
             category_bytes["other"] += size
+        risk_bytes[classify(path)] += size
 
     top = [
-        {"sizeMiB": mib(size), "bytes": size, "path": path}
+        {"sizeMiB": mib(size), "bytes": size, "path": path, "risk": classify(path)}
         for size, path in rows[: args.top]
     ]
     categories = [
         {"category": name, "sizeMiB": mib(size), "bytes": size}
         for name, size in sorted(category_bytes.items(), key=lambda item: item[1], reverse=True)
     ]
+    risks = [
+        {"class": name, "sizeMiB": mib(size), "bytes": size}
+        for name, size in sorted(risk_bytes.items(), key=lambda item: item[1], reverse=True)
+    ]
 
-    removable_hints = []
-    hint_tokens = (
-        "wallpaper", "ringtone", "notification", "alarm", "sample", "demo", "test",
-        "dictionary", "tts", "emoji", "trace", "debug", "benchmark", "recovery"
-    )
+    safe = []
+    review = []
+    protected = []
     for size, path in rows:
-        lower = path.lower()
-        if any(token in lower for token in hint_tokens):
-            removable_hints.append({"sizeMiB": mib(size), "bytes": size, "path": path})
-        if len(removable_hints) >= 60:
-            break
+        item = {"sizeMiB": mib(size), "bytes": size, "path": path}
+        risk = classify(path)
+        if risk == "safe_candidate" and len(safe) < 100:
+            safe.append(item)
+        elif risk == "review_candidate" and len(review) < 100:
+            review.append(item)
+        elif risk == "protected" and len(protected) < 100:
+            protected.append(item)
 
     result = {
         "totalProductFilesMiB": mib(sum(size for size, _ in rows)),
         "fileCount": len(rows),
         "categories": categories,
+        "riskClasses": risks,
         "largestFiles": top,
-        "reviewCandidates": removable_hints,
-        "note": "Review candidates are hints only. Compatibility-critical files must not be removed without boot/app-matrix evidence.",
+        "safeReviewCandidates": safe,
+        "dependencyReviewCandidates": review,
+        "protectedLargeFiles": protected,
+        "policy": {
+            "safe_candidate": "Review first; removable only if product validator and boot/app matrix stay green.",
+            "review_candidate": "Do not remove without explicit dependency/app evidence.",
+            "protected": "Do not remove for size optimization.",
+        },
     }
 
     output = Path(args.output)
@@ -94,15 +152,46 @@ def main() -> int:
         "|---|---:|",
     ]
     lines.extend(f"| {item['category']} | {item['sizeMiB']} |" for item in categories)
-    lines += ["", "## Largest files", "", "| MiB | Path |", "|---:|---|"]
-    lines.extend(f"| {item['sizeMiB']} | `{item['path']}` |" for item in top[:40])
-    lines += ["", "## Review candidates", "", "These are not automatic deletions; they require compatibility evidence.", "", "| MiB | Path |", "|---:|---|"]
-    lines.extend(f"| {item['sizeMiB']} | `{item['path']}` |" for item in removable_hints[:40])
+    lines += ["", "## Size by pruning risk", "", "| Class | MiB |", "|---|---:|"]
+    lines.extend(f"| {item['class']} | {item['sizeMiB']} |" for item in risks)
+    lines += ["", "## Largest files", "", "| MiB | Risk | Path |", "|---:|---|---|"]
+    lines.extend(f"| {item['sizeMiB']} | {item['risk']} | `{item['path']}` |" for item in top[:50])
     md.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+    plan = Path(args.plan)
+    plan_lines = [
+        "# JawalOS measured pruning plan",
+        "",
+        "Generated after a real Android build. Never delete protected entries for size.",
+        "",
+        "## Tier A — safest high-value review candidates",
+        "",
+        "| MiB | Path |",
+        "|---:|---|",
+    ]
+    plan_lines.extend(f"| {item['sizeMiB']} | `{item['path']}` |" for item in safe[:60])
+    plan_lines += [
+        "",
+        "## Tier B — dependency review required",
+        "",
+        "| MiB | Path |",
+        "|---:|---|",
+    ]
+    plan_lines.extend(f"| {item['sizeMiB']} | `{item['path']}` |" for item in review[:60])
+    plan_lines += [
+        "",
+        "## Protected large files — do not prune for size",
+        "",
+        "| MiB | Path |",
+        "|---:|---|",
+    ]
+    plan_lines.extend(f"| {item['sizeMiB']} | `{item['path']}` |" for item in protected[:60])
+    plan.write_text("\n".join(plan_lines) + "\n", encoding="utf-8")
 
     print(f"JawalOS size analysis: {result['totalProductFilesMiB']} MiB, {len(rows)} files")
     print(f"JSON: {output}")
     print(f"Markdown: {md}")
+    print(f"Pruning plan: {plan}")
     return 0
 
 
