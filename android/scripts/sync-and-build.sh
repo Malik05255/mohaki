@@ -98,7 +98,8 @@ du -b "$OUT_DIR/jawal-android.iso" > "$OUT_DIR/image-size.txt"
 python3 "$ROOT/tools/analyze-jawalos-size.py" \
   "$OUT_DIR/product-files.tsv" \
   --output "$OUT_DIR/size-analysis.json" \
-  --markdown "$OUT_DIR/size-analysis.md"
+  --markdown "$OUT_DIR/size-analysis.md" \
+  --plan "$OUT_DIR/pruning-plan.md"
 
 {
   printf 'android_branch=%s\n' "$MANIFEST_BRANCH"
@@ -110,8 +111,9 @@ python3 "$ROOT/tools/analyze-jawalos-size.py" \
 
 "$ROOT/tools/validate-product.sh" "$PRODUCT_OUT" "$OUT_DIR"
 
-printf '\nJawal Android build complete:\n  %s\n  %s\n  %s\n  %s\n' \
+printf '\nJawal Android build complete:\n  %s\n  %s\n  %s\n  %s\n  %s\n' \
   "$OUT_DIR/jawal-android.iso" \
   "$OUT_DIR/JawalSmokeApp.apk" \
   "$OUT_DIR/JawalArm64Smoke.apk" \
-  "$OUT_DIR/size-analysis.md"
+  "$OUT_DIR/size-analysis.md" \
+  "$OUT_DIR/pruning-plan.md"
