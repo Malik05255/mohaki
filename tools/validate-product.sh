@@ -24,7 +24,8 @@ BANNED_APPS=(
   DynamicSystemInstallationService MtpService OsuLogin SharedStorageBackup
   LocalTransport BackupRestoreConfirmation CaptivePortalLogin WifiDialog
   Development SampleLocationAttribution CtsShimPrebuilt CtsShimPrivPrebuilt
-  EmulatedCamera
+  EmulatedCamera DeviceAsWebcam Uwb UwbService SatelliteService
+  VirtualizationService microdroid microdroid_manager
 )
 
 for app in "${BANNED_APPS[@]}"; do
@@ -38,7 +39,9 @@ done
 BANNED_FILES=(
   '*/bin/sshd' '*/bin/htop' '*/bin/nano' '*/bin/vim' '*/bin/tcpdump'
   '*/bin/ntfs-3g' '*/bin/mkntfs' '*/bin/dmidecode' '*/bin/lspci'
-  '*/bin/thermal-daemon' '*/bin/hcitool'
+  '*/bin/thermal-daemon' '*/bin/hcitool' '*/bin/simpleperf' '*/bin/strace'
+  '*/bin/virtualizationservice' '*/bin/vm' '*/bin/vm_shell'
+  '*/bin/fastboot' '*/bin/lpdump' '*/bin/lpmake' '*/bin/lpadd' '*/bin/lpflash'
   '*/bin/hw/android.hardware.camera.provider.ranchu'
   '*/bin/hw/android.hardware.camera.provider.ranchu_minigbm'
 )
@@ -93,7 +96,8 @@ fi
 
 for feature in \
   '*/etc/permissions/android.hardware.camera*.xml' \
-  '*/etc/permissions/android.hardware.nfc*.xml'; do
+  '*/etc/permissions/android.hardware.nfc*.xml' \
+  '*/etc/permissions/android.hardware.uwb*.xml'; do
   if find "$PRODUCT_OUT" -path "$feature" -print -quit | grep -q .; then
     fail "Unsupported hardware feature declaration still present: $feature"
   else
