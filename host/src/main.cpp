@@ -1,4 +1,5 @@
 #include "PackageBridge.hpp"
+#include "RuntimeIntegrity.hpp"
 #include "RuntimeSettings.hpp"
 #include "VmController.hpp"
 
@@ -49,6 +50,10 @@ std::filesystem::path LocalDataDirectory() {
     path /= L"Jawal";
     std::filesystem::create_directories(path);
     return path;
+}
+
+std::filesystem::path QuickResumeMarker() {
+    return LocalDataDirectory() / L"quickresume.marker";
 }
 
 bool RunHiddenAndWait(const std::wstring& command, const std::filesystem::path& cwd) {
@@ -102,17 +107,6 @@ bool WhpxReady(std::wstring* reason) {
     return true;
 }
 
-void ResizeEmbeddedSurface(HWND renderHost) {
-    if (!renderHost) return;
-    RECT rc{};
-    GetClientRect(renderHost, &rc);
-    HWND child = GetWindow(renderHost, GW_CHILD);
-    while (child) {
-        MoveWindow(child, 0, 0, rc.right - rc.left, rc.bottom - rc.top, TRUE);
-        child = GetWindow(child, GW_HWNDNEXT);
-    }
-}
-
 unsigned AutomaticCpuCores(unsigned logicalProcessors) {
     if (logicalProcessors >= 12) return 6;
     if (logicalProcessors >= 8) return 4;
@@ -152,6 +146,12 @@ void StartRuntime(HWND owner) {
     const auto dataTemplate = runtime / L"images" / L"jawal-data-template.qcow2";
     const auto userData = dataDirectory / L"data.qcow2";
 
+    std::wstring integrityError;
+    if (!jawal::VerifyRuntimeIntegrity(runtime, &integrityError)) {
+        MessageBoxW(owner, integrityError.c_str(), L"فحص نظام جوال", MB_OK | MB_ICONERROR | MB_RTLREADING);
+        return;
+    }
+
     if (!std::filesystem::exists(systemDisk) ||
         !EnsureDataOverlay(runtime, dataTemplate, userData)) {
         MessageBoxW(owner,
@@ -180,6 +180,8 @@ void StartRuntime(HWND owner) {
     config.runtimeDir = runtime;
     config.systemDisk = systemDisk;
     config.dataDisk = userData;
+    config.quickResumeMarker = QuickResumeMarker();
+    config.resumeQuickState = std::filesystem::exists(config.quickResumeMarker);
     config.cpuCores = settings.cpuCores == 0
         ? automaticCpu
         : std::clamp(settings.cpuCores, 1u, maximumCpu);
@@ -201,7 +203,7 @@ bool FactoryReset(HWND owner) {
         MB_YESNO | MB_DEFBUTTON2 | MB_ICONWARNING | MB_RTLREADING);
     if (confirm != IDYES) return false;
 
-    gVm.Stop();
+    gVm.Stop(false);
 
     const auto root = ModuleDirectory();
     const auto runtime = root / L"runtime";
@@ -209,6 +211,8 @@ bool FactoryReset(HWND owner) {
     const auto userData = LocalDataDirectory() / L"data.qcow2";
 
     std::error_code ec;
+    std::filesystem::remove(QuickResumeMarker(), ec);
+    ec.clear();
     std::filesystem::remove(userData, ec);
     if (ec && std::filesystem::exists(userData)) {
         MessageBoxW(owner,
@@ -299,7 +303,7 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
         GetClientRect(hwnd, &rc);
         if (gRenderHost) {
             MoveWindow(gRenderHost, 0, 0, rc.right - rc.left, rc.bottom - rc.top, TRUE);
-            ResizeEmbeddedSurface(gRenderHost);
+            gVm.Resize();
         }
         return 0;
     }
@@ -321,7 +325,7 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
         return 0;
     }
     case WM_DESTROY:
-        gVm.Stop();
+        gVm.Stop(true, QuickResumeMarker());
         PostQuitMessage(0);
         return 0;
     }
