@@ -82,8 +82,6 @@ JAWAL_REMOVE_PACKAGES := \
     CtsShimPrebuilt \
     CtsShimPrivPrebuilt \
     CaptivePortalLogin \
-    Tethering \
-    com.android.tethering \
     WifiDialog \
     Development \
     SampleLocationAttribution \
