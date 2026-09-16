@@ -23,24 +23,47 @@ try {
         throw "ARM64 stage requested but Android reports no active native bridge."
     }
 
-    $started = Get-Date
+    & $pkg arm64-reset
+    if ($LASTEXITCODE -ne 0) { throw "Unable to reset ARM64 execution result channel." }
+
+    $installStarted = Get-Date
     & $pkg install $apk
-    $code = $LASTEXITCODE
-    $elapsed = [int]((Get-Date) - $started).TotalMilliseconds
-    if ($code -ne 0) {
-        throw "ARM64 APK installation failed with exit code $code."
+    $installCode = $LASTEXITCODE
+    $installElapsed = [int]((Get-Date) - $installStarted).TotalMilliseconds
+    if ($installCode -ne 0) {
+        throw "ARM64 APK installation failed with exit code $installCode."
+    }
+
+    & $pkg launch com.jawal.arm64smoke
+    if ($LASTEXITCODE -ne 0) { throw "ARM64 APK installed but could not be launched." }
+
+    $deadline = [DateTime]::UtcNow.AddSeconds([Math]::Min(60, $TimeoutSeconds))
+    $executionPassed = $false
+    do {
+        & $pkg arm64-result *> $null
+        if ($LASTEXITCODE -eq 0) {
+            $executionPassed = $true
+            break
+        }
+        Start-Sleep -Milliseconds 250
+    } while ([DateTime]::UtcNow -lt $deadline)
+
+    if (-not $executionPassed) {
+        throw "ARM64 native library installed and launched, but did not execute and return the expected value 42."
     }
 
     [ordered]@{
         passed = $true
+        nativeCodeExecuted = $true
+        nativeResult = 42
         nativeBridge = $nativeBridge
         abis = [string]$health.abis
         apk = (Split-Path -Leaf $apk)
-        elapsedMs = $elapsed
+        installElapsedMs = $installElapsed
         completedAtUtc = [DateTime]::UtcNow.ToString("o")
     } | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath $report -Encoding UTF8
 
-    Write-Host "PASS: ARM64 native-bridge smoke passed using $nativeBridge."
+    Write-Host "PASS: ARM64 native code executed through $nativeBridge and returned 42."
 }
 finally {
     if ($process -and -not $process.HasExited) {
