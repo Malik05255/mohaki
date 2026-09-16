@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  JawalOS exposes only capabilities that are actually present in the fixed
+  QEMU/WHPX virtual phone. Optional physical-phone hardware must be added only
+  when Jawal implements a real host bridge for it.
+-->
+<permissions>
+    <!-- Core app/UI capabilities. -->
+    <feature name="android.hardware.audio.output" />
+    <feature name="android.hardware.touchscreen" />
+    <feature name="android.hardware.screen.portrait" />
+    <feature name="android.hardware.screen.landscape" />
+
+    <!-- Core Android software contracts that remain in the stripped product. -->
+    <feature name="android.software.app_widgets" />
+    <feature name="android.software.home_screen" />
+    <feature name="android.software.input_methods" />
+    <feature name="android.software.picture_in_picture" />
+    <feature name="android.software.autofill" />
+    <feature name="android.software.credentials" />
+    <feature name="android.software.cant_save_state" />
+    <feature name="android.software.secure_lock_screen" />
+    <feature name="android.software.window_magnification" />
+
+    <!--
+      Intentionally absent in v1: camera, Bluetooth, Wi-Fi radio, NFC, UWB,
+      telephony/SIM, physical sensors, microphone passthrough, printing,
+      companion-device setup and Android-side backup.
+
+      Internet access is provided by virtio-net/NAT and does not require an
+      android.hardware.wifi declaration.
+    -->
+</permissions>
