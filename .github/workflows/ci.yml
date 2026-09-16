@@ -14,6 +14,20 @@ jobs:
     runs-on: windows-2022
     steps:
       - uses: actions/checkout@v4
+      - name: Parse PowerShell packaging scripts
+        shell: pwsh
+        run: |
+          $failed = $false
+          foreach ($path in @('packaging/assemble-windows-runtime.ps1', 'packaging/build-installer.ps1')) {
+            $tokens = $null
+            $errors = $null
+            [System.Management.Automation.Language.Parser]::ParseFile((Resolve-Path $path), [ref]$tokens, [ref]$errors) | Out-Null
+            if ($errors.Count -gt 0) {
+              $failed = $true
+              $errors | ForEach-Object { Write-Error "$path : $($_.Message)" }
+            }
+          }
+          if ($failed) { exit 1 }
       - name: Configure Jawal host
         run: cmake -S host -B build/host -G "Visual Studio 17 2022" -A x64
       - name: Build Jawal host
