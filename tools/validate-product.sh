@@ -12,15 +12,15 @@ warn() { printf 'WARN  %s\n' "$*" | tee -a "$REPORT"; }
 fail() { printf 'FAIL  %s\n' "$*" | tee -a "$REPORT"; FAILED=1; }
 FAILED=0
 
-# Exact app module directory names. Providers with similar names (for example
+# Exact module directory names. Providers with similar names (for example
 # CalendarProvider / ContactsProvider) are intentionally allowed because third
 # party applications use their public framework contracts.
 BANNED_APPS=(
   Aperture BlissUpdater BOSWallpapers Browser2 Calendar Camera2 Contacts
   DeskClock Dialer Email Etar ExactCalculator Exchange2 Gallery2 GameSpace
   Glimpse Jelly LiveWallpapers LiveWallpapersPicker messaging Music MusicFX
-  OmniJaws ParallelSpace QuickSearchBox Recorder Seedvault Stk Twelve
-  WallpaperPicker2
+  OmniJaws ParallelSpace QuickSearchBox Recorder Seedvault Stk Taskbar Twelve
+  WallpaperPicker2 Eleven
 )
 
 for app in "${BANNED_APPS[@]}"; do
@@ -28,6 +28,22 @@ for app in "${BANNED_APPS[@]}"; do
     fail "Bundled app still present: $app"
   else
     pass "Removed bundled app: $app"
+  fi
+done
+
+# These utilities are useful on bare-metal Android-x86 distributions, but Jawal
+# always boots a fixed QEMU virtual machine and must not pay their runtime/image cost.
+BANNED_FILES=(
+  '*/bin/sshd' '*/bin/htop' '*/bin/nano' '*/bin/vim' '*/bin/tcpdump'
+  '*/bin/ntfs-3g' '*/bin/mkntfs' '*/bin/dmidecode' '*/bin/lspci'
+  '*/bin/thermal-daemon' '*/bin/hcitool'
+)
+
+for pattern in "${BANNED_FILES[@]}"; do
+  if find "$PRODUCT_OUT" -path "$pattern" -print -quit | grep -q .; then
+    fail "Bare-metal utility still present: $pattern"
+  else
+    pass "Removed bare-metal utility: $pattern"
   fi
 done
 
@@ -49,11 +65,13 @@ require_path "SystemUI" '*/SystemUI*'
 require_path "Settings" '*/Settings*'
 require_path "PermissionController" '*/PermissionController*'
 require_path "WebView implementation" '*/WebView*' '*/webview*'
+require_path "Media framework" '*/bin/mediaserver' '*/bin/media.swcodec' '*/lib64/libstagefright*'
+require_path "Package installer" '*/PackageInstaller*' '*/PackageInstallerService*'
+require_path "ext4 recovery/fsck" '*/bin/e2fsck'
 require_path "Jawal system bridge" '*/JawalSystemBridge*'
 require_path "Jawal Store" '*/JawalStore*'
 
-# Report large files so every size decision is evidence-based.
-find "$PRODUCT_OUT" -type f -printf '%s\t%p\n' | sort -nr | head -n 80 > "$REPORT_DIR/largest-files.tsv"
+find "$PRODUCT_OUT" -type f -printf '%s\t%p\n' | sort -nr | head -n 100 > "$REPORT_DIR/largest-files.tsv"
 
 ISO="${REPORT_DIR}/jawal-android.iso"
 if [[ -f "$ISO" ]]; then
