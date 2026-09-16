@@ -2,9 +2,9 @@
 
 #include <winsock2.h>
 #include <ws2tcpip.h>
-#include <dwmapi.h>
 
 #include <chrono>
+#include <fstream>
 #include <sstream>
 #include <thread>
 #include <vector>
@@ -53,48 +53,20 @@ bool SendSocketAll(SOCKET socket, const char* data, int size) {
     return true;
 }
 
-bool QmpCommand(const char* command) {
-    WSADATA wsa{};
-    if (WSAStartup(MAKEWORD(2, 2), &wsa) != 0) return false;
-
-    SOCKET socket = ::socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
-    if (socket == INVALID_SOCKET) {
-        WSACleanup();
-        return false;
+std::string EscapeJson(const std::string& value) {
+    std::string out;
+    out.reserve(value.size() + 8);
+    for (const char c : value) {
+        if (c == '\\' || c == '"') out.push_back('\\');
+        out.push_back(c);
     }
-
-    sockaddr_in address{};
-    address.sin_family = AF_INET;
-    address.sin_port = htons(45454);
-    InetPtonW(AF_INET, L"127.0.0.1", &address.sin_addr);
-
-    bool ok = connect(socket, reinterpret_cast<sockaddr*>(&address), sizeof(address)) == 0;
-    if (ok) {
-        DWORD timeoutMs = 1000;
-        setsockopt(socket, SOL_SOCKET, SO_RCVTIMEO,
-                   reinterpret_cast<const char*>(&timeoutMs), sizeof(timeoutMs));
-        char greeting[2048]{};
-        recv(socket, greeting, sizeof(greeting), 0);
-
-        static constexpr char capabilities[] = "{\"execute\":\"qmp_capabilities\"}\r\n";
-        ok = SendSocketAll(socket, capabilities, static_cast<int>(sizeof(capabilities) - 1));
-        if (ok) {
-            char reply[512]{};
-            recv(socket, reply, sizeof(reply), 0);
-            std::string payload = std::string("{\"execute\":\"") + command + "\"}\r\n";
-            ok = SendSocketAll(socket, payload.c_str(), static_cast<int>(payload.size()));
-        }
-    }
-
-    closesocket(socket);
-    WSACleanup();
-    return ok;
+    return out;
 }
 
 } // namespace
 
 VmController::~VmController() {
-    Stop();
+    Stop(false);
 }
 
 bool VmController::Running() const noexcept {
@@ -132,14 +104,76 @@ std::wstring VmController::BuildCommandLine(HWND, const VmConfig& c) const {
         << L" -device usb-tablet"
         << L" -device usb-kbd"
         << L" -device virtio-rng-pci"
-        << L" -nic user,model=virtio-net-pci,hostfwd=tcp:127.0.0.1:27183-:27183,hostfwd=tcp:127.0.0.1:27184-:27184"
+        << L" -nic user,model=virtio-net-pci,hostfwd=tcp:127.0.0.1:27183-:27183,hostfwd=tcp:127.0.0.1:27184-:27184,hostfwd=tcp:127.0.0.1:27185-:27185"
         << L" -drive file=" << Quote(c.systemDisk)
         << L",if=virtio,format=qcow2,readonly=on,cache=none"
         << L" -drive file=" << Quote(c.dataDisk)
         << L",if=virtio,format=qcow2,cache=writeback,discard=unmap"
         << L" -monitor none -serial none"
         << L" -qmp tcp:127.0.0.1:45454,server=on,wait=off";
+
+    if (c.resumeQuickState) {
+        cmd << L" -loadvm jawal_quick_resume";
+    }
     return cmd.str();
+}
+
+bool VmController::QmpCommand(const std::string& json, std::string* replyOut) const {
+    WSADATA wsa{};
+    if (WSAStartup(MAKEWORD(2, 2), &wsa) != 0) return false;
+
+    SOCKET socket = ::socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+    if (socket == INVALID_SOCKET) {
+        WSACleanup();
+        return false;
+    }
+
+    sockaddr_in address{};
+    address.sin_family = AF_INET;
+    address.sin_port = htons(45454);
+    InetPtonW(AF_INET, L"127.0.0.1", &address.sin_addr);
+
+    bool ok = connect(socket, reinterpret_cast<sockaddr*>(&address), sizeof(address)) == 0;
+    std::string reply;
+    if (ok) {
+        DWORD timeoutMs = 30000;
+        setsockopt(socket, SOL_SOCKET, SO_RCVTIMEO,
+                   reinterpret_cast<const char*>(&timeoutMs), sizeof(timeoutMs));
+        setsockopt(socket, SOL_SOCKET, SO_SNDTIMEO,
+                   reinterpret_cast<const char*>(&timeoutMs), sizeof(timeoutMs));
+
+        char buffer[8192]{};
+        recv(socket, buffer, sizeof(buffer) - 1, 0); // greeting
+
+        static constexpr char capabilities[] = "{\"execute\":\"qmp_capabilities\"}\r\n";
+        ok = SendSocketAll(socket, capabilities, static_cast<int>(sizeof(capabilities) - 1));
+        if (ok) {
+            recv(socket, buffer, sizeof(buffer) - 1, 0);
+            std::string payload = json + "\r\n";
+            ok = SendSocketAll(socket, payload.c_str(), static_cast<int>(payload.size()));
+        }
+        if (ok) {
+            const int received = recv(socket, buffer, sizeof(buffer) - 1, 0);
+            if (received > 0) {
+                buffer[received] = '\0';
+                reply.assign(buffer, static_cast<std::size_t>(received));
+                ok = reply.find("\"return\"") != std::string::npos &&
+                     reply.find("\"error\"") == std::string::npos;
+            } else {
+                ok = false;
+            }
+        }
+    }
+
+    closesocket(socket);
+    WSACleanup();
+    if (replyOut) *replyOut = std::move(reply);
+    return ok;
+}
+
+bool VmController::QmpHumanMonitor(const std::string& command, std::string* reply) const {
+    return QmpCommand("{\"execute\":\"human-monitor-command\",\"arguments\":{\"command-line\":\"" +
+                      EscapeJson(command) + "\"}}", reply);
 }
 
 bool VmController::Start(HWND renderParent, const VmConfig& config, std::wstring* error) {
@@ -185,40 +219,84 @@ bool VmController::Start(HWND renderParent, const VmConfig& config, std::wstring
     CloseHandle(process_.hThread);
     process_.hThread = nullptr;
 
-    HWND vmWindow = WaitForVmWindow(process_.dwProcessId, std::chrono::seconds(15));
+    HWND vmWindow = WaitForVmWindow(process_.dwProcessId, std::chrono::seconds(config.resumeQuickState ? 8 : 15));
     if (!vmWindow) {
+        const bool retryCold = config.resumeQuickState;
+        Stop(false);
+        if (retryCold) {
+            std::error_code ec;
+            if (!config.quickResumeMarker.empty()) std::filesystem::remove(config.quickResumeMarker, ec);
+            VmConfig cold = config;
+            cold.resumeQuickState = false;
+            return Start(renderParent, cold, error);
+        }
         if (error) *error = L"بدأ Android لكن سطح العرض المسرّع لم يظهر.";
-        Stop();
         return false;
     }
 
-    LONG_PTR style = GetWindowLongPtrW(vmWindow, GWL_STYLE);
-    style &= ~(WS_CAPTION | WS_THICKFRAME | WS_MINIMIZEBOX | WS_MAXIMIZEBOX | WS_SYSMENU | WS_POPUP);
-    style |= WS_CHILD | WS_VISIBLE;
-    SetWindowLongPtrW(vmWindow, GWL_STYLE, style);
-    SetParent(vmWindow, renderParent);
-
-    RECT rc{};
-    GetClientRect(renderParent, &rc);
-    SetWindowPos(vmWindow, nullptr, 0, 0, rc.right - rc.left, rc.bottom - rc.top,
-                 SWP_NOZORDER | SWP_NOACTIVATE | SWP_FRAMECHANGED);
+    if (!renderBridge_.Attach(renderParent, vmWindow)) {
+        if (error) *error = L"تعذر دمج سطح Android داخل نافذة جوال.";
+        Stop(false);
+        return false;
+    }
     return true;
 }
 
-void VmController::Stop() noexcept {
+bool VmController::SaveQuickResume(const std::filesystem::path& marker, std::wstring* error) {
+    if (!Running()) return false;
+
+    // Keep exactly one VM-state snapshot. Deleting a missing snapshot is harmless.
+    std::string ignored;
+    QmpHumanMonitor("delvm jawal_quick_resume", &ignored);
+
+    std::string reply;
+    if (!QmpHumanMonitor("savevm jawal_quick_resume", &reply)) {
+        if (error) *error = L"تعذر حفظ حالة الاستئناف السريع؛ سيتم الإغلاق العادي.";
+        return false;
+    }
+
+    std::error_code ec;
+    std::filesystem::create_directories(marker.parent_path(), ec);
+    std::ofstream out(marker, std::ios::trunc);
+    if (!out) {
+        if (error) *error = L"تم حفظ Snapshot لكن تعذر إنشاء علامة الاستئناف.";
+        return false;
+    }
+    out << "jawal_quick_resume\n";
+    return true;
+}
+
+void VmController::Stop(bool tryQuickResume, const std::filesystem::path& marker) noexcept {
     if (!process_.hProcess) return;
 
-    QmpCommand("system_powerdown");
-    if (WaitForSingleObject(process_.hProcess, 8000) == WAIT_TIMEOUT) {
-        QmpCommand("quit");
-        if (WaitForSingleObject(process_.hProcess, 1500) == WAIT_TIMEOUT) {
-            TerminateProcess(process_.hProcess, 0);
-            WaitForSingleObject(process_.hProcess, 1000);
+    bool saved = false;
+    if (tryQuickResume && !marker.empty()) {
+        std::wstring ignored;
+        saved = SaveQuickResume(marker, &ignored);
+    }
+
+    renderBridge_.Detach();
+
+    if (saved) {
+        QmpCommand("{\"execute\":\"quit\"}", nullptr);
+        WaitForSingleObject(process_.hProcess, 5000);
+    } else {
+        QmpCommand("{\"execute\":\"system_powerdown\"}", nullptr);
+        if (WaitForSingleObject(process_.hProcess, 8000) == WAIT_TIMEOUT) {
+            QmpCommand("{\"execute\":\"quit\"}", nullptr);
+            if (WaitForSingleObject(process_.hProcess, 1500) == WAIT_TIMEOUT) {
+                TerminateProcess(process_.hProcess, 0);
+                WaitForSingleObject(process_.hProcess, 1000);
+            }
         }
     }
 
     CloseHandle(process_.hProcess);
     process_ = {};
+}
+
+void VmController::Resize() noexcept {
+    renderBridge_.Resize();
 }
 
 } // namespace jawal
