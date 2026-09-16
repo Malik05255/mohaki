@@ -205,7 +205,13 @@ endif
 PRODUCT_PACKAGES := $(filter-out $(JAWAL_REMOVE_PACKAGES),$(PRODUCT_PACKAGES))
 PRODUCT_PACKAGES_DEBUG := $(filter-out $(JAWAL_REMOVE_PACKAGES),$(PRODUCT_PACKAGES_DEBUG))
 
+# Remove inherited hardware declarations for devices Jawal does not expose.
+# Also remove the stock handheld profile because it declares camera, Bluetooth,
+# sensors, telecom, printing and backup as mandatory. Jawal ships its own
+# truthful minimal feature profile below.
 PRODUCT_COPY_FILES := $(filter-out \
+    %/handheld_core_hardware.xml:% \
+    %/tablet_core_hardware.xml:% \
     %/android.hardware.camera.xml:% \
     %/android.hardware.camera.front.xml:% \
     %/android.hardware.camera.any.xml:% \
@@ -223,11 +229,10 @@ PRODUCT_COPY_FILES := $(filter-out \
     %/android.hardware.wifi.aware.xml:% \
     %:$(TARGET_COPY_OUT_PRODUCT)/media/audio/alarms/% \
     %:$(TARGET_COPY_OUT_PRODUCT)/media/audio/notifications/% \
-    %:$(TARGET_COPY_OUT_PRODUCT)/media/audio/ringtones/% \
-    frameworks/native/data/etc/tablet_core_hardware.xml:%,$(PRODUCT_COPY_FILES))
+    %:$(TARGET_COPY_OUT_PRODUCT)/media/audio/ringtones/%,$(PRODUCT_COPY_FILES))
 
 PRODUCT_COPY_FILES += \
-    frameworks/native/data/etc/handheld_core_hardware.xml:$(TARGET_COPY_OUT_VENDOR)/etc/permissions/handheld_core_hardware.xml \
+    device/jawal/jawal_core_hardware.xml:$(TARGET_COPY_OUT_VENDOR)/etc/permissions/jawal_core_hardware.xml \
     frameworks/base/data/sounds/Alarm_Classic.ogg:$(TARGET_COPY_OUT_PRODUCT)/media/audio/alarms/Alarm_Classic.ogg \
     frameworks/base/data/sounds/notifications/pixiedust.ogg:$(TARGET_COPY_OUT_PRODUCT)/media/audio/notifications/pixiedust.ogg \
     frameworks/base/data/sounds/newwavelabs/OnTheHunt.ogg:$(TARGET_COPY_OUT_PRODUCT)/media/audio/notifications/OnTheHunt.ogg \
