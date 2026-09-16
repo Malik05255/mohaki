@@ -40,8 +40,9 @@ jobs:
       - name: Stage 1 - build stripped Android 15 QPR2 JawalOS
         env:
           JAWAL_NATIVE_BRIDGE: ${{ inputs.native_bridge }}
-          JAWAL_BUILD_TYPE: userdebug
+          JAWAL_BUILD_TYPE: user
           JAWAL_SERVICES_VARIANT: microg
+          JAWAL_STRICT_SIZE: "1"
         run: android/scripts/sync-and-build.sh
 
       - name: Stage 2 - package immutable system + sparse data template
