@@ -95,6 +95,12 @@ chmod +x "$ROOT/tools/build-arm64-smoke.sh"
 find "$PRODUCT_OUT" -type f -printf '%s\t%p\n' | sort -nr > "$OUT_DIR/product-files.tsv"
 du -b "$OUT_DIR/jawal-android.iso" > "$OUT_DIR/image-size.txt"
 
+# Produce measured category/largest-file evidence for the next pruning pass.
+python3 "$ROOT/tools/analyze-jawalos-size.py" \
+  "$OUT_DIR/product-files.tsv" \
+  --output "$OUT_DIR/size-analysis.json" \
+  --markdown "$OUT_DIR/size-analysis.md"
+
 {
   printf 'android_branch=%s\n' "$MANIFEST_BRANCH"
   printf 'services_variant=%s\n' "$BUILD_VARIANT"
@@ -105,7 +111,8 @@ du -b "$OUT_DIR/jawal-android.iso" > "$OUT_DIR/image-size.txt"
 
 "$ROOT/tools/validate-product.sh" "$PRODUCT_OUT" "$OUT_DIR"
 
-printf '\nJawal Android build complete:\n  %s\n  %s\n  %s\n' \
+printf '\nJawal Android build complete:\n  %s\n  %s\n  %s\n  %s\n' \
   "$OUT_DIR/jawal-android.iso" \
   "$OUT_DIR/JawalSmokeApp.apk" \
-  "$OUT_DIR/JawalArm64Smoke.apk"
+  "$OUT_DIR/JawalArm64Smoke.apk" \
+  "$OUT_DIR/size-analysis.md"
