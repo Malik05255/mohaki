@@ -1,8 +1,10 @@
 #include "ClipboardBridge.hpp"
+#include "DeviceMaintenance.hpp"
 #include "Diagnostics.hpp"
 #include "PackageBridge.hpp"
 #include "RuntimeIntegrity.hpp"
 #include "RuntimeSettings.hpp"
+#include "RuntimeWatchdog.hpp"
 #include "SettingsDialog.hpp"
 #include "VmController.hpp"
 
@@ -15,6 +17,7 @@
 #include <filesystem>
 #include <string>
 #include <thread>
+#include <utility>
 #include <vector>
 
 namespace {
@@ -24,8 +27,16 @@ constexpr wchar_t kSingleInstanceMutex[] = L"Local\\Jawal.SingleInstance";
 constexpr int kInitialHeight = 820;
 constexpr UINT kStartRuntimeMessage = WM_APP + 1;
 constexpr UINT kTransferCompleteMessage = WM_APP + 2;
+constexpr UINT kRuntimeRecoveryMessage = WM_APP + 3;
+
 constexpr UINT kMenuSettings = 0x1100;
 constexpr UINT kMenuFactoryReset = 0x1110;
+constexpr UINT kMenuBackup = 0x1120;
+constexpr UINT kMenuRestore = 0x1130;
+constexpr UINT kMenuStorageMaintenance = 0x1140;
+constexpr UINT kMenuRotate = 0x1150;
+constexpr UINT kMenuFullscreen = 0x1160;
+constexpr UINT kMenuLogs = 0x1170;
 
 struct TransferCompletion {
     bool success{false};
@@ -35,8 +46,12 @@ struct TransferCompletion {
 
 jawal::VmController gVm;
 jawal::ClipboardBridge gClipboard;
+jawal::RuntimeWatchdog gWatchdog;
 HWND gRenderHost = nullptr;
 HANDLE gSingleInstance = nullptr;
+bool gFullscreen = false;
+WINDOWPLACEMENT gWindowedPlacement{sizeof(WINDOWPLACEMENT)};
+LONG_PTR gWindowedStyle = 0;
 
 std::filesystem::path ModuleDirectory() {
     std::vector<wchar_t> buffer(32768);
@@ -136,8 +151,21 @@ unsigned MaximumMemoryMb(unsigned totalMb) {
     return std::min(12288u, totalMb - reserve);
 }
 
+void StopRuntime(bool quickResume) {
+    gWatchdog.Stop();
+    gClipboard.Stop();
+    gVm.Stop(quickResume, quickResume ? QuickResumeMarker() : std::filesystem::path{});
+}
+
+void InvalidateQuickResume() {
+    std::error_code ec;
+    std::filesystem::remove(QuickResumeMarker(), ec);
+}
+
 void StartRuntime(HWND owner) {
+    gWatchdog.Stop();
     jawal::LogDiagnostic(L"Starting Android runtime");
+
     std::wstring virtualizationError;
     if (!WhpxReady(&virtualizationError)) {
         jawal::LogDiagnostic(L"WHPX preflight failed: " + virtualizationError);
@@ -205,6 +233,7 @@ void StartRuntime(HWND owner) {
     }
 
     if (settings.clipboardSync) gClipboard.Start(); else gClipboard.Stop();
+    gWatchdog.Start(owner, kRuntimeRecoveryMessage);
     jawal::LogDiagnostic(L"Android runtime started successfully");
 }
 
@@ -217,23 +246,22 @@ bool FactoryReset(HWND owner) {
     if (confirm != IDYES) return false;
 
     jawal::LogDiagnostic(L"Factory reset requested");
-    gClipboard.Stop();
-    gVm.Stop(false);
+    StopRuntime(false);
 
     const auto root = ModuleDirectory();
     const auto runtime = root / L"runtime";
     const auto dataTemplate = runtime / L"images" / L"jawal-data-template.qcow2";
     const auto userData = LocalDataDirectory() / L"data.qcow2";
 
+    InvalidateQuickResume();
     std::error_code ec;
-    std::filesystem::remove(QuickResumeMarker(), ec);
-    ec.clear();
     std::filesystem::remove(userData, ec);
     if (ec && std::filesystem::exists(userData)) {
         jawal::LogDiagnostic(L"Factory reset failed deleting data overlay");
         MessageBoxW(owner,
                     L"تعذر حذف بيانات الجوال الحالية. أغلق أي برنامج يستخدم ملفات Jawal ثم حاول مرة أخرى.",
                     L"فورمات جوال", MB_OK | MB_ICONERROR | MB_RTLREADING);
+        StartRuntime(owner);
         return false;
     }
 
@@ -257,10 +285,8 @@ void OpenRuntimeSettings(HWND owner) {
     if (!jawal::ShowSettingsDialog(owner, LocalDataDirectory())) return;
 
     jawal::LogDiagnostic(L"Runtime settings updated; restarting Android");
-    gClipboard.Stop();
-    gVm.Stop(false);
-    std::error_code ec;
-    std::filesystem::remove(QuickResumeMarker(), ec);
+    StopRuntime(false);
+    InvalidateQuickResume();
     StartRuntime(owner);
 }
 
@@ -285,12 +311,121 @@ void ProcessDroppedFile(HWND owner, std::filesystem::path file) {
     }).detach();
 }
 
+void BackupDevice(HWND owner) {
+    const bool wasRunning = gVm.Running();
+    StopRuntime(false);
+    InvalidateQuickResume();
+
+    const auto result = jawal::CreateDataBackup(ModuleDirectory() / L"runtime", LocalDataDirectory());
+    jawal::LogDiagnostic(result.ok ? L"Device backup completed" : L"Device backup failed");
+    if (wasRunning) StartRuntime(owner);
+
+    std::wstring message = result.detail;
+    if (result.ok) message += L"\n\n" + result.artifact.wstring();
+    MessageBoxW(owner, message.c_str(), L"نسخة احتياطية", MB_OK | (result.ok ? MB_ICONINFORMATION : MB_ICONERROR) | MB_RTLREADING);
+}
+
+void RestoreDevice(HWND owner) {
+    if (MessageBoxW(owner,
+                    L"سيتم استبدال بيانات الجوال الحالية بآخر نسخة احتياطية. هل تريد المتابعة؟",
+                    L"استعادة جوال", MB_YESNO | MB_DEFBUTTON2 | MB_ICONWARNING | MB_RTLREADING) != IDYES) {
+        return;
+    }
+
+    const bool wasRunning = gVm.Running();
+    StopRuntime(false);
+    InvalidateQuickResume();
+    const auto result = jawal::RestoreLatestDataBackup(ModuleDirectory() / L"runtime", LocalDataDirectory());
+    jawal::LogDiagnostic(result.ok ? L"Device restore completed" : L"Device restore failed");
+    if (wasRunning || result.ok) StartRuntime(owner);
+
+    MessageBoxW(owner, result.detail.c_str(), L"استعادة جوال",
+                MB_OK | (result.ok ? MB_ICONINFORMATION : MB_ICONERROR) | MB_RTLREADING);
+}
+
+void MaintainStorage(HWND owner) {
+    const bool wasRunning = gVm.Running();
+    StopRuntime(false);
+    InvalidateQuickResume();
+    const auto result = jawal::CheckAndCompactData(ModuleDirectory() / L"runtime", LocalDataDirectory());
+    jawal::LogDiagnostic(result.ok ? L"Storage maintenance completed" : L"Storage maintenance failed");
+    if (wasRunning) StartRuntime(owner);
+
+    MessageBoxW(owner, result.detail.c_str(), L"صيانة التخزين",
+                MB_OK | (result.ok ? MB_ICONINFORMATION : MB_ICONERROR) | MB_RTLREADING);
+}
+
+void RotateDevice(HWND owner) {
+    auto settings = jawal::LoadRuntimeSettings(LocalDataDirectory());
+    std::swap(settings.displayWidth, settings.displayHeight);
+    if (!jawal::SaveRuntimeSettings(LocalDataDirectory(), settings)) {
+        MessageBoxW(owner, L"تعذر حفظ اتجاه الشاشة الجديد.", L"جوال", MB_OK | MB_ICONERROR | MB_RTLREADING);
+        return;
+    }
+
+    jawal::LogDiagnostic(L"Display orientation changed");
+    StopRuntime(false);
+    InvalidateQuickResume();
+    StartRuntime(owner);
+}
+
+void ToggleFullscreen(HWND hwnd) {
+    if (!gFullscreen) {
+        gWindowedPlacement.length = sizeof(gWindowedPlacement);
+        GetWindowPlacement(hwnd, &gWindowedPlacement);
+        gWindowedStyle = GetWindowLongPtrW(hwnd, GWL_STYLE);
+
+        MONITORINFO monitor{sizeof(monitor)};
+        if (!GetMonitorInfoW(MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST), &monitor)) return;
+
+        SetWindowLongPtrW(hwnd, GWL_STYLE, gWindowedStyle & ~static_cast<LONG_PTR>(WS_OVERLAPPEDWINDOW));
+        SetWindowPos(hwnd, HWND_TOP,
+                     monitor.rcMonitor.left, monitor.rcMonitor.top,
+                     monitor.rcMonitor.right - monitor.rcMonitor.left,
+                     monitor.rcMonitor.bottom - monitor.rcMonitor.top,
+                     SWP_NOOWNERZORDER | SWP_FRAMECHANGED);
+        gFullscreen = true;
+    } else {
+        SetWindowLongPtrW(hwnd, GWL_STYLE, gWindowedStyle);
+        SetWindowPlacement(hwnd, &gWindowedPlacement);
+        SetWindowPos(hwnd, nullptr, 0, 0, 0, 0,
+                     SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOOWNERZORDER | SWP_FRAMECHANGED);
+        gFullscreen = false;
+    }
+    gVm.Resize();
+}
+
+void OpenLogs(HWND owner) {
+    const auto logDir = LocalDataDirectory() / L"logs";
+    std::filesystem::create_directories(logDir);
+    const auto result = ShellExecuteW(owner, L"open", logDir.c_str(), nullptr, nullptr, SW_SHOWNORMAL);
+    if (reinterpret_cast<INT_PTR>(result) <= 32) {
+        MessageBoxW(owner, L"تعذر فتح مجلد سجلات جوال.", L"جوال", MB_OK | MB_ICONERROR | MB_RTLREADING);
+    }
+}
+
+void RecoverRuntime(HWND owner) {
+    if (!gVm.Running()) return;
+    jawal::LogDiagnostic(L"Automatic runtime recovery started");
+    StopRuntime(false);
+    InvalidateQuickResume();
+    StartRuntime(owner);
+}
+
 void AddJawalSystemMenu(HWND hwnd) {
     HMENU menu = GetSystemMenu(hwnd, FALSE);
     if (!menu) return;
     AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
     AppendMenuW(menu, MF_STRING, kMenuSettings, L"إعدادات جوال");
+    AppendMenuW(menu, MF_STRING, kMenuRotate, L"تدوير الشاشة");
+    AppendMenuW(menu, MF_STRING, kMenuFullscreen, L"ملء الشاشة");
+    AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
+    AppendMenuW(menu, MF_STRING, kMenuBackup, L"إنشاء نسخة احتياطية");
+    AppendMenuW(menu, MF_STRING, kMenuRestore, L"استعادة آخر نسخة");
+    AppendMenuW(menu, MF_STRING, kMenuStorageMaintenance, L"فحص وضغط التخزين");
     AppendMenuW(menu, MF_STRING, kMenuFactoryReset, L"فورمات الجوال");
+    AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
+    AppendMenuW(menu, MF_STRING, kMenuLogs, L"سجلات التشخيص");
 }
 
 LRESULT CALLBACK WindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
@@ -304,26 +439,32 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
         PostMessageW(hwnd, kStartRuntimeMessage, 0, 0);
         return 0;
 
-    case WM_SYSCOMMAND:
-        if ((wParam & 0xFFF0u) == kMenuSettings) {
-            OpenRuntimeSettings(hwnd);
-            return 0;
-        }
-        if ((wParam & 0xFFF0u) == kMenuFactoryReset) {
-            FactoryReset(hwnd);
-            return 0;
-        }
+    case WM_SYSCOMMAND: {
+        const UINT command = static_cast<UINT>(wParam & 0xFFF0u);
+        if (command == kMenuSettings) { OpenRuntimeSettings(hwnd); return 0; }
+        if (command == kMenuFactoryReset) { FactoryReset(hwnd); return 0; }
+        if (command == kMenuBackup) { BackupDevice(hwnd); return 0; }
+        if (command == kMenuRestore) { RestoreDevice(hwnd); return 0; }
+        if (command == kMenuStorageMaintenance) { MaintainStorage(hwnd); return 0; }
+        if (command == kMenuRotate) { RotateDevice(hwnd); return 0; }
+        if (command == kMenuFullscreen) { ToggleFullscreen(hwnd); return 0; }
+        if (command == kMenuLogs) { OpenLogs(hwnd); return 0; }
         break;
+    }
 
     case kStartRuntimeMessage:
         StartRuntime(hwnd);
+        return 0;
+
+    case kRuntimeRecoveryMessage:
+        RecoverRuntime(hwnd);
         return 0;
 
     case kTransferCompleteMessage: {
         auto* completion = reinterpret_cast<TransferCompletion*>(lParam);
         if (!completion) return 0;
         const UINT icon = completion->success ? MB_ICONINFORMATION : MB_ICONERROR;
-        std::wstring message = completion->fileName + L"\n\n" + completion->detail;
+        const std::wstring message = completion->fileName + L"\n\n" + completion->detail;
         MessageBoxW(hwnd, message.c_str(), L"جوال", MB_OK | icon | MB_RTLREADING);
         delete completion;
         return 0;
@@ -355,12 +496,10 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
     }
 
     case WM_DESTROY: {
+        gWatchdog.Stop();
         gClipboard.Stop();
         const auto settings = jawal::LoadRuntimeSettings(LocalDataDirectory());
-        if (!settings.quickResume) {
-            std::error_code ec;
-            std::filesystem::remove(QuickResumeMarker(), ec);
-        }
+        if (!settings.quickResume) InvalidateQuickResume();
         gVm.Stop(settings.quickResume, QuickResumeMarker());
         jawal::LogDiagnostic(L"Jawal closed");
         PostQuitMessage(0);
@@ -402,7 +541,7 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int showCommand) {
     const auto settings = jawal::LoadRuntimeSettings(dataDirectory);
     const double aspect = settings.displayHeight == 0 ? 0.5625 :
                           static_cast<double>(settings.displayWidth) / settings.displayHeight;
-    const int initialWidth = std::clamp(static_cast<int>(kInitialHeight * aspect), 380, 650);
+    const int initialWidth = std::clamp(static_cast<int>(kInitialHeight * aspect), 380, 900);
 
     RECT desktop{};
     SystemParametersInfoW(SPI_GETWORKAREA, 0, &desktop, 0);
