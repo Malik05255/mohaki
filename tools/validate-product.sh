@@ -22,9 +22,9 @@ BANNED_APPS=(
   CellBroadcastService CellBroadcastApp EmergencyInfo MmsService SimAppDialog
   ONS WAPPushManager NfcNci Tag ManagedProvisioning CompanionDeviceManager
   DynamicSystemInstallationService MtpService OsuLogin SharedStorageBackup
-  LocalTransport BackupRestoreConfirmation CaptivePortalLogin Tethering
-  WifiDialog Development SampleLocationAttribution CtsShimPrebuilt
-  CtsShimPrivPrebuilt EmulatedCamera
+  LocalTransport BackupRestoreConfirmation CaptivePortalLogin WifiDialog
+  Development SampleLocationAttribution CtsShimPrebuilt CtsShimPrivPrebuilt
+  EmulatedCamera
 )
 
 for app in "${BANNED_APPS[@]}"; do
