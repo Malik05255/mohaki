@@ -59,6 +59,8 @@ jobs:
           cat dist/android/image-size.txt >> "$GITHUB_STEP_SUMMARY"
           echo "" >> "$GITHUB_STEP_SUMMARY"
           du -h dist/android/jawal-android.iso dist/android-runtime/images/*.qcow2 >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          cat dist/android/size-analysis.md >> "$GITHUB_STEP_SUMMARY"
 
       - name: Upload JawalOS runtime
         uses: actions/upload-artifact@v4
@@ -72,6 +74,9 @@ jobs:
             dist/android/JawalArm64Smoke.apk
             dist/android/validation.txt
             dist/android/largest-files.tsv
+            dist/android/product-files.tsv
+            dist/android/size-analysis.json
+            dist/android/size-analysis.md
             dist/android/build-metadata.txt
             dist/android/image-size.txt
 
@@ -132,10 +137,10 @@ jobs:
             dist/reports/**
 
   stage-4-runtime:
-    name: "4 WHPX boot/performance smoke"
+    name: "4 WHPX boot/GPU/quick-resume gate"
     needs: stage-3-package
     runs-on: [self-hosted, Windows, X64, jawal-windows-hw]
-    timeout-minutes: 20
+    timeout-minutes: 35
     steps:
       - uses: actions/checkout@v4
       - uses: actions/download-artifact@v4
@@ -147,11 +152,30 @@ jobs:
         shell: pwsh
         run: ./tools/windows-runtime-smoke.ps1 -JawalExe 'dist/portable/Jawal.exe' -TimeoutSeconds 180
 
-      - name: Upload runtime report
+      - name: Verify accelerated guest EGL/GLES path
+        shell: pwsh
+        run: |
+          ./tools/windows-gpu-smoke.ps1 `
+            -JawalExe 'dist/portable/Jawal.exe' `
+            -JawalPkgExe 'dist/portable/JawalPkg.exe' `
+            -MinimumSwapsPerSecond 30 `
+            -TimeoutSeconds 180
+
+      - name: Save and restore one quick-resume snapshot
+        shell: pwsh
+        run: |
+          ./tools/windows-quick-resume-smoke.ps1 `
+            -JawalExe 'dist/portable/Jawal.exe' `
+            -TimeoutSeconds 180
+
+      - name: Upload runtime/performance reports
         uses: actions/upload-artifact@v4
         with:
           name: jawal-stage4-report
-          path: dist/reports/windows-runtime-smoke.json
+          path: |
+            dist/reports/windows-runtime-smoke.json
+            dist/reports/windows-gpu-smoke.json
+            dist/reports/windows-quick-resume-smoke.json
 
   stage-5-functional:
     name: "5 Android services + APK install smoke"
@@ -207,7 +231,7 @@ jobs:
           path: dist/reports/apk-matrix.json
 
   stage-7-arm64:
-    name: "7 ARM64 native-bridge gate"
+    name: "7 ARM64 native execution gate"
     needs: stage-6-apk-matrix
     runs-on: [self-hosted, Windows, X64, jawal-windows-hw]
     timeout-minutes: 30
@@ -225,7 +249,7 @@ jobs:
           New-Item dist/reports -ItemType Directory -Force | Out-Null
           '{"passed":true,"skipped":true,"reason":"native_bridge=none"}' | Set-Content dist/reports/arm64-smoke.json -Encoding UTF8
 
-      - name: Validate active native bridge and install generated ARM64-only APK
+      - name: Execute generated ARM64-only NativeActivity through native bridge
         if: ${{ inputs.native_bridge == 'libndk' }}
         shell: pwsh
         run: |
