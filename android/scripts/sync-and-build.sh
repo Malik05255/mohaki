@@ -7,7 +7,7 @@ OUT_DIR="${JAWAL_ARTIFACTS_DIR:-$ROOT/dist/android}"
 MANIFEST_URL="https://github.com/BlissOS/platform_manifest.git"
 MANIFEST_BRANCH="${JAWAL_ANDROID_BRANCH:-voyager-x86-qpr2}"
 BUILD_VARIANT="${JAWAL_SERVICES_VARIANT:-microg}"
-BUILD_TYPE="${JAWAL_BUILD_TYPE:-userdebug}"
+BUILD_TYPE="${JAWAL_BUILD_TYPE:-user}"
 NATIVE_BRIDGE="${JAWAL_NATIVE_BRIDGE:-none}"
 LUNCH_TARGET="jawal_x86_64-ap4a-${BUILD_TYPE}"
 
@@ -95,7 +95,6 @@ chmod +x "$ROOT/tools/build-arm64-smoke.sh"
 find "$PRODUCT_OUT" -type f -printf '%s\t%p\n' | sort -nr > "$OUT_DIR/product-files.tsv"
 du -b "$OUT_DIR/jawal-android.iso" > "$OUT_DIR/image-size.txt"
 
-# Produce measured category/largest-file evidence for the next pruning pass.
 python3 "$ROOT/tools/analyze-jawalos-size.py" \
   "$OUT_DIR/product-files.tsv" \
   --output "$OUT_DIR/size-analysis.json" \
