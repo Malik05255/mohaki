@@ -24,6 +24,6 @@ foreach ($path in $resolved) {
     if ($LASTEXITCODE -ne 0) { throw "Authenticode verification failed: $path" }
 
     $auth = Get-AuthenticodeSignature -FilePath $path
-    if ($auth.Status -ne 'Valid') { throw "Invalid Authenticode state for $path: $($auth.Status)" }
+    if ($auth.Status -ne 'Valid') { throw "Invalid Authenticode state for ${path}: $($auth.Status)" }
     Write-Host "SIGNED: $path"
 }
