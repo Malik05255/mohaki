@@ -16,10 +16,9 @@ bool RenderBridge::Attach(HWND parent, HWND vmWindow) {
     exStyle &= ~(WS_EX_APPWINDOW | WS_EX_WINDOWEDGE | WS_EX_CLIENTEDGE);
     SetWindowLongPtrW(vmWindow, GWL_EXSTYLE, exStyle);
 
-    if (!SetParent(vmWindow, parent)) {
-        const DWORD error = GetLastError();
-        if (error != ERROR_SUCCESS) return false;
-    }
+    SetLastError(ERROR_SUCCESS);
+    HWND previousParent = SetParent(vmWindow, parent);
+    if (!previousParent && GetLastError() != ERROR_SUCCESS) return false;
 
     BOOL disableTransitions = TRUE;
     DwmSetWindowAttribute(vmWindow, DWMWA_TRANSITIONS_FORCEDISABLED,
