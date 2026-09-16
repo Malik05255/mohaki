@@ -11,30 +11,24 @@ import android.opengl.GLES20;
 import android.os.IBinder;
 import android.util.Log;
 
-import java.io.BufferedWriter;
-import java.io.IOException;
-import java.io.OutputStreamWriter;
-import java.net.InetAddress;
-import java.net.ServerSocket;
-import java.net.Socket;
-import java.nio.charset.StandardCharsets;
 import java.util.Locale;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
 public final class GpuProbeService extends Service {
     private static final String TAG = "JawalGpuProbe";
-    private static final int PORT = 27186;
+    private static volatile String resultJson = "{\"ready\":false}";
 
-    private final ExecutorService executor = Executors.newFixedThreadPool(2);
-    private volatile ServerSocket server;
-    private volatile String resultJson = "{\"ready\":false}";
+    private final ExecutorService executor = Executors.newSingleThreadExecutor();
+
+    public static String getResultJson() {
+        return resultJson;
+    }
 
     @Override
     public void onCreate() {
         super.onCreate();
         executor.execute(() -> resultJson = runProbe());
-        executor.execute(this::serve);
     }
 
     private String runProbe() {
@@ -130,30 +124,6 @@ public final class GpuProbeService extends Service {
         }
     }
 
-    private void serve() {
-        try (ServerSocket socket = new ServerSocket(PORT, 2, InetAddress.getByName("0.0.0.0"))) {
-            server = socket;
-            while (!Thread.currentThread().isInterrupted()) {
-                try (Socket client = socket.accept()) {
-                    String source = client.getInetAddress().getHostAddress();
-                    if (!"10.0.2.2".equals(source)) {
-                        Log.w(TAG, "Rejected GPU probe client from " + source);
-                        continue;
-                    }
-                    BufferedWriter writer = new BufferedWriter(
-                            new OutputStreamWriter(client.getOutputStream(), StandardCharsets.UTF_8));
-                    writer.write(resultJson);
-                    writer.newLine();
-                    writer.flush();
-                } catch (Exception error) {
-                    Log.w(TAG, "GPU probe response failed", error);
-                }
-            }
-        } catch (IOException error) {
-            if (server != null && !server.isClosed()) Log.e(TAG, "GPU probe server failed", error);
-        }
-    }
-
     private static String safe(String value) {
         return value == null ? "" : value;
     }
@@ -174,7 +144,6 @@ public final class GpuProbeService extends Service {
 
     @Override
     public void onDestroy() {
-        try { if (server != null) server.close(); } catch (IOException ignored) { }
         executor.shutdownNow();
         super.onDestroy();
     }
