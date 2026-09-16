@@ -74,7 +74,7 @@ bool QmpCommand(const char* command) {
         setsockopt(socket, SOL_SOCKET, SO_RCVTIMEO,
                    reinterpret_cast<const char*>(&timeoutMs), sizeof(timeoutMs));
         char greeting[2048]{};
-        recv(socket, greeting, sizeof(greeting), 0); // QMP greeting; content isn't needed here.
+        recv(socket, greeting, sizeof(greeting), 0);
 
         static constexpr char capabilities[] = "{\"execute\":\"qmp_capabilities\"}\r\n";
         ok = SendSocketAll(socket, capabilities, static_cast<int>(sizeof(capabilities) - 1));
@@ -122,7 +122,7 @@ std::wstring VmController::BuildCommandLine(HWND, const VmConfig& c) const {
 
     cmd << L" -kernel " << Quote(kernel)
         << L" -initrd " << Quote(initrd)
-        << L" -append \"root=/dev/ram0 SRC=/AndroidOS DATA=vdb HWC=drm_minigbm GRALLOC=minigbm_arcvm FFMPEG_CODEC=1 FFMPEG_PREFER_C2=1 quiet\""
+        << L" -append \"root=/dev/ram0 SRC=/AndroidOS DATA=/dev/vdb HWC=drm_minigbm GRALLOC=minigbm_arcvm FFMPEG_CODEC=1 FFMPEG_PREFER_C2=1 quiet\""
         << L" -device virtio-vga-gl"
         << L" -display sdl,gl=on,window-close=off"
         << L" -audiodev sdl,id=jawal_audio"
@@ -185,8 +185,6 @@ bool VmController::Start(HWND renderParent, const VmConfig& config, std::wstring
     CloseHandle(process_.hThread);
     process_.hThread = nullptr;
 
-    // Keep QEMU's accelerated native presentation surface; embedding avoids a
-    // video encode/decode pipeline and its latency/copy overhead.
     HWND vmWindow = WaitForVmWindow(process_.dwProcessId, std::chrono::seconds(15));
     if (!vmWindow) {
         if (error) *error = L"بدأ Android لكن سطح العرض المسرّع لم يظهر.";
@@ -210,8 +208,6 @@ bool VmController::Start(HWND renderParent, const VmConfig& config, std::wstring
 void VmController::Stop() noexcept {
     if (!process_.hProcess) return;
 
-    // Ask Android/ACPI to shut down first so ext4 user data isn't torn down by
-    // killing the VM process. Force quit is only the last fallback.
     QmpCommand("system_powerdown");
     if (WaitForSingleObject(process_.hProcess, 8000) == WAIT_TIMEOUT) {
         QmpCommand("quit");
