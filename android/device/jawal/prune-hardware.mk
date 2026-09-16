@@ -12,14 +12,26 @@ JAWAL_REMOVE_HARDWARE_PACKAGES := \
     bt_vhci_forwarder \
     mac80211_create_radios \
     SdkSetup \
-    atrace
+    atrace \
+    bugreport \
+    bugreportz \
+    dumpstate \
+    incident \
+    incidentd \
+    perfetto_cmd \
+    traced \
+    traced_probes
 
+# Intentionally retained despite size:
+# - android.hardware.drm-service-lazy.clearkey: media/DRM compatibility
+# - keymint/gatekeeper/auth security services
+# - health/power/thermal: runtime stability and scheduling behavior
+# - neuralnetworks: NNAPI compatibility
+# - graphics/audio/media C2 services and codecs
+# - netd/NetworkStack/DnsResolver and virtio networking path
 PRODUCT_PACKAGES := $(filter-out $(JAWAL_REMOVE_HARDWARE_PACKAGES),$(PRODUCT_PACKAGES))
 PRODUCT_PACKAGES_DEBUG := $(filter-out $(JAWAL_REMOVE_HARDWARE_PACKAGES),$(PRODUCT_PACKAGES_DEBUG))
 
-# Bluetooth hardware/audio policy is meaningless when the Bluetooth HAL and
-# radio are absent. Internet still uses virtio-net and the Android NetworkStack.
-PRODUCT_COPY_FILES := $(filter-out \
-    %/bluetooth_audio_policy_configuration%.xml:% \
-    %/android.hardware.usb.host.xml:% \
-    %/android.hardware.usb.accessory.xml:%,$(PRODUCT_COPY_FILES))
+# PRODUCT_COPY_FILES cleanup is finalized in prune-copyfiles.mk after this file.
+# Keeping all copy-file filtering in one place avoids fragile GNU make wildcard
+# behavior and makes the final image policy auditable.
