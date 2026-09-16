@@ -7,6 +7,7 @@
 #include <chrono>
 #include <cstdint>
 #include <fstream>
+#include <string>
 #include <thread>
 
 namespace jawal {
@@ -14,7 +15,8 @@ namespace {
 
 constexpr std::uint32_t kMagic = 0x4A41504B; // JAPK
 constexpr std::uint32_t kProtocolVersion = 1;
-constexpr unsigned short kBridgePort = 27183;
+constexpr unsigned short kPackagePort = 27183;
+constexpr unsigned short kControlPort = 27185;
 
 bool SendAll(SOCKET socket, const char* data, std::size_t size) {
     while (size > 0) {
@@ -50,14 +52,14 @@ bool SendU64(SOCKET socket, std::uint64_t value) {
     return SendAll(socket, reinterpret_cast<const char*>(bytes.data()), bytes.size());
 }
 
-SOCKET ConnectToGuest() {
-    for (int attempt = 0; attempt < 60; ++attempt) {
+SOCKET ConnectToGuest(unsigned short port, int attempts = 60) {
+    for (int attempt = 0; attempt < attempts; ++attempt) {
         SOCKET socket = ::socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
         if (socket == INVALID_SOCKET) return INVALID_SOCKET;
 
         sockaddr_in address{};
         address.sin_family = AF_INET;
-        address.sin_port = htons(kBridgePort);
+        address.sin_port = htons(port);
         InetPtonW(AF_INET, L"127.0.0.1", &address.sin_addr);
 
         if (connect(socket, reinterpret_cast<sockaddr*>(&address), sizeof(address)) == 0) {
@@ -115,7 +117,7 @@ PackageInstallResult InstallApk(const std::filesystem::path& apk) {
         return result;
     }
 
-    SOCKET socket = ConnectToGuest();
+    SOCKET socket = ConnectToGuest(kPackagePort);
     if (socket == INVALID_SOCKET) {
         WSACleanup();
         result.status = -103;
@@ -157,6 +159,44 @@ PackageInstallResult InstallApk(const std::filesystem::path& apk) {
     result.status = static_cast<std::int32_t>(ntohl(networkStatus));
     result.detail = StatusText(result.status);
     return result;
+}
+
+bool GuestControl(const std::string& command, std::string* response) {
+    if (response) response->clear();
+
+    WSADATA wsa{};
+    if (WSAStartup(MAKEWORD(2, 2), &wsa) != 0) return false;
+
+    SOCKET socket = ConnectToGuest(kControlPort);
+    if (socket == INVALID_SOCKET) {
+        WSACleanup();
+        return false;
+    }
+
+    DWORD timeoutMs = 10000;
+    setsockopt(socket, SOL_SOCKET, SO_RCVTIMEO,
+               reinterpret_cast<const char*>(&timeoutMs), sizeof(timeoutMs));
+    setsockopt(socket, SOL_SOCKET, SO_SNDTIMEO,
+               reinterpret_cast<const char*>(&timeoutMs), sizeof(timeoutMs));
+
+    const std::string payload = command + "\n";
+    bool ok = SendAll(socket, payload.data(), payload.size());
+    std::string reply;
+    if (ok) {
+        std::array<char, 1024> buffer{};
+        const int received = recv(socket, buffer.data(), static_cast<int>(buffer.size() - 1), 0);
+        if (received > 0) {
+            reply.assign(buffer.data(), static_cast<std::size_t>(received));
+            while (!reply.empty() && (reply.back() == '\r' || reply.back() == '\n')) reply.pop_back();
+        } else {
+            ok = false;
+        }
+    }
+
+    closesocket(socket);
+    WSACleanup();
+    if (response) *response = reply;
+    return ok && reply.rfind("OK", 0) == 0;
 }
 
 } // namespace jawal
