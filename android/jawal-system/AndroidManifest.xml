@@ -29,5 +29,17 @@
             android:directBootAware="true"
             android:exported="false"
             android:stopWithTask="false" />
+
+        <service
+            android:name=".ControlService"
+            android:directBootAware="true"
+            android:exported="false"
+            android:stopWithTask="false" />
+
+        <service
+            android:name=".GpuProbeService"
+            android:directBootAware="true"
+            android:exported="false"
+            android:stopWithTask="false" />
     </application>
 </manifest>
