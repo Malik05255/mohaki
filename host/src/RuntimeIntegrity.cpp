@@ -1,7 +1,7 @@
 #include "RuntimeIntegrity.hpp"
 
-#include <bcrypt.h>
 #include <windows.h>
+#include <bcrypt.h>
 
 #include <array>
 #include <cctype>
