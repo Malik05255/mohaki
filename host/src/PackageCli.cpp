@@ -22,6 +22,7 @@ void Usage() {
         << L"  JawalPkg install <apk>\n"
         << L"  JawalPkg launch <package>\n"
         << L"  JawalPkg package <package>\n"
+        << L"  JawalPkg gpu-result\n"
         << L"  JawalPkg arm64-reset\n"
         << L"  JawalPkg arm64-result\n";
 }
@@ -54,6 +55,8 @@ int wmain(int argc, wchar_t** argv) {
         const auto packageName = NarrowAscii(argv[2]);
         if (packageName.empty()) return 2;
         command = "PACKAGE " + packageName;
+    } else if (_wcsicmp(argv[1], L"gpu-result") == 0 && argc == 2) {
+        command = "GPU_RESULT";
     } else if (_wcsicmp(argv[1], L"arm64-reset") == 0 && argc == 2) {
         command = "RESET_ARM64";
     } else if (_wcsicmp(argv[1], L"arm64-result") == 0 && argc == 2) {
