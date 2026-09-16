@@ -49,15 +49,13 @@ mkdir -p device/jawal vendor/jawal
 rsync -a --delete "$ROOT/android/device/jawal/" device/jawal/
 rsync -a --delete "$ROOT/android/jawal-system/" vendor/jawal/jawal-system/
 rsync -a --delete "$ROOT/android/store/" vendor/jawal/store/
+rsync -a --delete "$ROOT/android/smoke-app/" vendor/jawal/smoke-app/
 
 export AOSP_DIR
 "$ROOT/tools/fetch-store.sh" "$AOSP_DIR/vendor/jawal/store/AuroraStore.apk"
 
 export BLISS_BUILD_VARIANT="$BUILD_VARIANT"
 
-# ARM/ARM64 APK support is optional and deliberately not backed by blobs stored
-# in this repository. If a legally redistributable libndk_translation vendor
-# tree is provided in the source checkout, enable the upstream Android-x86 hook.
 unset USE_LIBNDK_TRANSLATION_NB
 if [[ "$NATIVE_BRIDGE" == "libndk" ]]; then
   bridge_mk="vendor/google/emu-x86/target/libndk_translation.mk"
@@ -73,7 +71,7 @@ source build/envsetup.sh
 lunch "$LUNCH_TARGET"
 
 JOBS="${JAWAL_BUILD_JOBS:-$(nproc)}"
-m -j"$JOBS" iso_img
+m -j"$JOBS" iso_img JawalSmokeApp
 
 PRODUCT_OUT="${ANDROID_PRODUCT_OUT:?ANDROID_PRODUCT_OUT was not set by lunch}"
 ISO="$(find "$PRODUCT_OUT" -maxdepth 1 -type f -name '*.iso' -printf '%T@ %p\n' | sort -nr | head -n1 | cut -d' ' -f2-)"
@@ -83,6 +81,13 @@ if [[ -z "$ISO" || ! -f "$ISO" ]]; then
 fi
 
 cp -f "$ISO" "$OUT_DIR/jawal-android.iso"
+
+SMOKE_APK="$(find "$PRODUCT_OUT" -type f -name 'JawalSmokeApp.apk' -print -quit || true)"
+if [[ -z "$SMOKE_APK" || ! -f "$SMOKE_APK" ]]; then
+  echo "JawalSmokeApp.apk was not produced by the Android build." >&2
+  exit 5
+fi
+cp -f "$SMOKE_APK" "$OUT_DIR/JawalSmokeApp.apk"
 
 find "$PRODUCT_OUT" -type f -printf '%s\t%p\n' | sort -nr > "$OUT_DIR/product-files.tsv"
 du -b "$OUT_DIR/jawal-android.iso" > "$OUT_DIR/image-size.txt"
@@ -97,4 +102,4 @@ du -b "$OUT_DIR/jawal-android.iso" > "$OUT_DIR/image-size.txt"
 
 "$ROOT/tools/validate-product.sh" "$PRODUCT_OUT" "$OUT_DIR"
 
-printf '\nJawal Android build complete:\n  %s\n' "$OUT_DIR/jawal-android.iso"
+printf '\nJawal Android build complete:\n  %s\n  %s\n' "$OUT_DIR/jawal-android.iso" "$OUT_DIR/JawalSmokeApp.apk"
