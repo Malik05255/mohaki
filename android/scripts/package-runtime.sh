@@ -3,7 +3,7 @@ set -euo pipefail
 
 ISO="${1:?usage: package-runtime.sh JAWAL_ANDROID_ISO OUTPUT_RUNTIME_DIR}"
 RUNTIME="${2:?usage: package-runtime.sh JAWAL_ANDROID_ISO OUTPUT_RUNTIME_DIR}"
-DATA_GIB="${JAWAL_DATA_GIB:-32}"
+DATA_GIB="${JAWAL_DATA_GIB:-128}"
 
 for tool in bsdtar qemu-img mkfs.ext4 mount umount truncate; do
   command -v "$tool" >/dev/null || { echo "Missing packaging tool: $tool" >&2; exit 2; }
@@ -64,18 +64,18 @@ sync
 
 qemu-img convert -c -p -f raw -O qcow2 "$work/system.raw" "$RUNTIME/images/jawal-system.qcow2"
 
-# Empty ext4 data template. The apparent capacity can be tens of GiB while the
-# shipped file remains tiny because qcow2 stores only allocated filesystem blocks.
+# Empty ext4 data template. The apparent capacity is intentionally phone-like
+# (128 GiB by default), but qcow2 stores only allocated blocks. A clean install
+# therefore stays tiny and grows only as the user installs apps and stores data.
 truncate -s "${DATA_GIB}G" "$work/data.raw"
 mkfs.ext4 -q -F -L JAWALDATA -m 0 -E lazy_itable_init=1,lazy_journal_init=1 "$work/data.raw"
 qemu-img convert -c -p -f raw -O qcow2 "$work/data.raw" "$RUNTIME/images/jawal-data-template.qcow2"
 
-# Integrity manifest consumed by packaging/updater logic.
 (
   cd "$RUNTIME"
   sha256sum android/kernel android/initrd.img images/jawal-system.qcow2 images/jawal-data-template.qcow2 > runtime.sha256
 )
 
-printf 'Jawal Android runtime packaged:\n'
+printf 'Jawal Android runtime packaged (data capacity: %s GiB):\n' "$DATA_GIB"
 du -h "$RUNTIME/android/kernel" "$RUNTIME/android/initrd.img" \
       "$RUNTIME/images/jawal-system.qcow2" "$RUNTIME/images/jawal-data-template.qcow2"
