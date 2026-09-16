@@ -14,8 +14,6 @@ CATEGORIES = {
     "firmware": ("/firmware/", "/vendor/firmware/"),
 }
 
-# Never recommend deleting these merely for size. They directly affect app
-# compatibility, rendering/media quality, security, networking, storage or input.
 PROTECTED_TOKENS = (
     "webview", "trichrome", "framework.jar", "services.jar", "app_process",
     "surfaceflinger", "systemui", "permissioncontroller", "packageinstaller",
@@ -26,20 +24,19 @@ PROTECTED_TOKENS = (
     "gatekeeper", "vold", "storagemanager", "latinime", "inputmethod",
     "e2fsck", "fsck.ext4", "selinux", "sepolicy", "zygote", "libart",
     "libbinder", "libc.so", "libdl.so", "libm.so", "liblog.so",
-    "jawalsystembridge", "jawalstore", "handheld_core_hardware",
+    "jawalsystembridge", "jawalstore", "jawal_core_hardware",
 )
 
-# Strong candidates: content, diagnostics and physical-hardware helpers Jawal
-# deliberately does not expose. These still require validator/boot evidence.
 SAFE_HINT_TOKENS = (
     "wallpaper", "ringtone", "notification", "alarm", "sample", "demo",
     "benchmark", "trace", "debug", "test", "recovery", "setupwizard",
     "updater", "print", "nfc", "uwb", "satellite", "camera.provider",
     "emulatedcamera", "fastboot", "simpleperf", "strace", "heapprofd",
     "microdroid", "virtualizationservice", "/vm_shell", "/vm",
+    "gnss-service.ranchu", "sensors@2.1-impl.ranchu", "wpa_supplicant",
+    "hostapd", "bt_vhci", "mac80211", "bluetooth-service.default",
 )
 
-# Potentially removable but more likely to have indirect app dependencies.
 REVIEW_HINT_TOKENS = (
     "dictionary", "tts", "emoji", "fonts", "locale", "hyph", "firmware",
     "bluetooth", "location", "sensor", "backup", "companion", "provision",
@@ -156,6 +153,12 @@ def main() -> int:
     lines.extend(f"| {item['class']} | {item['sizeMiB']} |" for item in risks)
     lines += ["", "## Largest files", "", "| MiB | Risk | Path |", "|---:|---|---|"]
     lines.extend(f"| {item['sizeMiB']} | {item['risk']} | `{item['path']}` |" for item in top[:50])
+    lines += ["", "## Tier A — safest high-value review candidates", "", "| MiB | Path |", "|---:|---|"]
+    lines.extend(f"| {item['sizeMiB']} | `{item['path']}` |" for item in safe[:40])
+    lines += ["", "## Tier B — dependency review required", "", "| MiB | Path |", "|---:|---|"]
+    lines.extend(f"| {item['sizeMiB']} | `{item['path']}` |" for item in review[:30])
+    lines += ["", "## Protected large files — do not prune for size", "", "| MiB | Path |", "|---:|---|"]
+    lines.extend(f"| {item['sizeMiB']} | `{item['path']}` |" for item in protected[:30])
     md.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
     plan = Path(args.plan)
@@ -170,21 +173,9 @@ def main() -> int:
         "|---:|---|",
     ]
     plan_lines.extend(f"| {item['sizeMiB']} | `{item['path']}` |" for item in safe[:60])
-    plan_lines += [
-        "",
-        "## Tier B — dependency review required",
-        "",
-        "| MiB | Path |",
-        "|---:|---|",
-    ]
+    plan_lines += ["", "## Tier B — dependency review required", "", "| MiB | Path |", "|---:|---|"]
     plan_lines.extend(f"| {item['sizeMiB']} | `{item['path']}` |" for item in review[:60])
-    plan_lines += [
-        "",
-        "## Protected large files — do not prune for size",
-        "",
-        "| MiB | Path |",
-        "|---:|---|",
-    ]
+    plan_lines += ["", "## Protected large files — do not prune for size", "", "| MiB | Path |", "|---:|---|"]
     plan_lines.extend(f"| {item['sizeMiB']} | `{item['path']}` |" for item in protected[:60])
     plan.write_text("\n".join(plan_lines) + "\n", encoding="utf-8")
 
