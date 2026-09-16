@@ -2,8 +2,18 @@
 # The upstream PC device layer comes from Android-Generic/BlissOS, while the
 # visible product remains a minimal Android phone runtime.
 
-# Prevent upstream optional hardware/user features from entering the product.
+# Disable entire Goldfish/emulator hardware families before the upstream x86
+# product inherits them. This is smaller and safer than building their HALs,
+# init scripts and manifests and trying to delete the output afterward.
 TARGET_FACE_UNLOCK_SUPPORTED := false
+EMULATOR_DISABLE_RADIO := true
+EMULATOR_VENDOR_NO_BIOMETRICS := true
+EMULATOR_VENDOR_NO_THREADNETWORK := true
+EMULATOR_VENDOR_NO_UWB := true
+EMULATOR_VENDOR_NO_GNSS := true
+EMULATOR_VENDOR_NO_SENSORS := true
+EMULATOR_VENDOR_NO_CAMERA := true
+EMULATOR_VENDOR_NO_REBOOT_ESCROW := true
 
 $(call inherit-product, device/generic/common/x86_64.mk)
 
@@ -17,8 +27,8 @@ PRODUCT_BRAND := Jawal
 PRODUCT_MODEL := Jawal Virtual Phone
 PRODUCT_MANUFACTURER := Jawal
 
-# Shipping only the primary UX languages avoids a large locale/font/resource
-# footprint. More languages can be added without changing the runtime design.
+# Shipping only the primary UX languages avoids a large locale/resource
+# footprint. Framework/font pieces needed for application rendering remain.
 PRODUCT_LOCALES := ar_SA en_US
 
 PRODUCT_SYSTEM_PROPERTIES += \
