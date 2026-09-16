@@ -7,18 +7,29 @@ import android.content.Context;
 import android.content.Intent;
 import android.content.IntentFilter;
 import android.content.pm.PackageInstaller;
+import android.content.pm.PackageInfo;
+import android.content.pm.PackageManager;
+import android.net.ConnectivityManager;
+import android.net.Network;
+import android.net.NetworkCapabilities;
+import android.os.Build;
 import android.os.IBinder;
+import android.os.StatFs;
 import android.util.Log;
+import android.webkit.WebView;
 
 import java.io.BufferedInputStream;
 import java.io.BufferedOutputStream;
+import java.io.BufferedWriter;
 import java.io.DataInputStream;
 import java.io.DataOutputStream;
 import java.io.IOException;
 import java.io.OutputStream;
+import java.io.OutputStreamWriter;
 import java.net.InetAddress;
 import java.net.ServerSocket;
 import java.net.Socket;
+import java.nio.charset.StandardCharsets;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -27,37 +38,130 @@ import java.util.concurrent.atomic.AtomicInteger;
 
 public final class BridgeService extends Service {
     private static final String TAG = "JawalSystem";
-    private static final int PORT = 27183;
+    private static final int PACKAGE_PORT = 27183;
+    private static final int HEALTH_PORT = 27184;
     private static final int MAGIC = 0x4A41504B; // JAPK
     private static final int PROTOCOL_VERSION = 1;
     private static final long MAX_APK_BYTES = 16L * 1024L * 1024L * 1024L;
 
     private final ExecutorService acceptExecutor = Executors.newSingleThreadExecutor();
+    private final ExecutorService healthExecutor = Executors.newSingleThreadExecutor();
     private final ExecutorService installExecutor = Executors.newSingleThreadExecutor();
-    private volatile ServerSocket server;
+    private volatile ServerSocket packageServer;
+    private volatile ServerSocket healthServer;
 
     @Override
     public void onCreate() {
         super.onCreate();
-        acceptExecutor.execute(this::serve);
+        acceptExecutor.execute(this::servePackages);
+        healthExecutor.execute(this::serveHealth);
     }
 
-    private void serve() {
-        try (ServerSocket socket = new ServerSocket(PORT, 1, InetAddress.getByName("0.0.0.0"))) {
-            server = socket;
-            Log.i(TAG, "Jawal package bridge ready on private VM port " + PORT);
+    private void servePackages() {
+        try (ServerSocket socket = new ServerSocket(PACKAGE_PORT, 1, InetAddress.getByName("0.0.0.0"))) {
+            packageServer = socket;
+            Log.i(TAG, "Jawal package bridge ready on private VM port " + PACKAGE_PORT);
             while (!Thread.currentThread().isInterrupted()) {
                 final Socket client = socket.accept();
-                installExecutor.execute(() -> handleClient(client));
+                installExecutor.execute(() -> handlePackageClient(client));
             }
         } catch (IOException error) {
-            if (server != null && !server.isClosed()) {
+            if (packageServer != null && !packageServer.isClosed()) {
                 Log.e(TAG, "Package bridge stopped unexpectedly", error);
             }
         }
     }
 
-    private void handleClient(Socket client) {
+    private void serveHealth() {
+        try (ServerSocket socket = new ServerSocket(HEALTH_PORT, 2, InetAddress.getByName("0.0.0.0"))) {
+            healthServer = socket;
+            Log.i(TAG, "Jawal health bridge ready on private VM port " + HEALTH_PORT);
+            while (!Thread.currentThread().isInterrupted()) {
+                try (Socket client = socket.accept()) {
+                    final String source = client.getInetAddress().getHostAddress();
+                    if (!"10.0.2.2".equals(source)) {
+                        Log.w(TAG, "Rejected health probe from " + source);
+                        continue;
+                    }
+                    final BufferedWriter writer = new BufferedWriter(
+                            new OutputStreamWriter(client.getOutputStream(), StandardCharsets.UTF_8));
+                    writer.write(buildHealthJson());
+                    writer.newLine();
+                    writer.flush();
+                } catch (Exception error) {
+                    Log.w(TAG, "Health probe failed", error);
+                }
+            }
+        } catch (IOException error) {
+            if (healthServer != null && !healthServer.isClosed()) {
+                Log.e(TAG, "Health bridge stopped unexpectedly", error);
+            }
+        }
+    }
+
+    private String buildHealthJson() {
+        final PackageManager pm = getPackageManager();
+        String webViewPackage = "";
+        try {
+            final PackageInfo webView = WebView.getCurrentWebViewPackage();
+            if (webView != null) webViewPackage = webView.packageName;
+        } catch (Throwable error) {
+            Log.w(TAG, "Unable to query WebView provider", error);
+        }
+
+        boolean networkInternet = false;
+        boolean networkValidated = false;
+        try {
+            final ConnectivityManager connectivity = getSystemService(ConnectivityManager.class);
+            final Network active = connectivity != null ? connectivity.getActiveNetwork() : null;
+            final NetworkCapabilities capabilities =
+                    connectivity != null && active != null ? connectivity.getNetworkCapabilities(active) : null;
+            networkInternet = capabilities != null &&
+                    capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET);
+            networkValidated = capabilities != null &&
+                    capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED);
+        } catch (Throwable error) {
+            Log.w(TAG, "Unable to query network health", error);
+        }
+
+        long freeDataBytes = 0L;
+        try {
+            freeDataBytes = new StatFs(getDataDir().getAbsolutePath()).getAvailableBytes();
+        } catch (Throwable error) {
+            Log.w(TAG, "Unable to query data storage", error);
+        }
+
+        final boolean touchscreen = pm.hasSystemFeature("android.hardware.touchscreen");
+        final boolean portrait = pm.hasSystemFeature("android.hardware.screen.portrait");
+        final boolean audioOutput = pm.hasSystemFeature("android.hardware.audio.output");
+
+        final StringBuilder abis = new StringBuilder();
+        for (int index = 0; index < Build.SUPPORTED_ABIS.length; ++index) {
+            if (index > 0) abis.append(',');
+            abis.append(Build.SUPPORTED_ABIS[index]);
+        }
+
+        return "{" +
+                "\"ready\":true," +
+                "\"sdk\":" + Build.VERSION.SDK_INT + "," +
+                "\"release\":\"" + escapeJson(Build.VERSION.RELEASE) + "\"," +
+                "\"abis\":\"" + escapeJson(abis.toString()) + "\"," +
+                "\"webview\":\"" + escapeJson(webViewPackage) + "\"," +
+                "\"networkInternet\":" + networkInternet + "," +
+                "\"networkValidated\":" + networkValidated + "," +
+                "\"audioOutput\":" + audioOutput + "," +
+                "\"touchscreen\":" + touchscreen + "," +
+                "\"portrait\":" + portrait + "," +
+                "\"dataFreeBytes\":" + freeDataBytes +
+                "}";
+    }
+
+    private static String escapeJson(String value) {
+        if (value == null) return "";
+        return value.replace("\\", "\\\\").replace("\"", "\\\"");
+    }
+
+    private void handlePackageClient(Socket client) {
         try (client;
              DataInputStream input = new DataInputStream(new BufferedInputStream(client.getInputStream()));
              DataOutputStream output = new DataOutputStream(new BufferedOutputStream(client.getOutputStream()))) {
@@ -183,9 +287,13 @@ public final class BridgeService extends Service {
     @Override
     public void onDestroy() {
         try {
-            if (server != null) server.close();
+            if (packageServer != null) packageServer.close();
+        } catch (IOException ignored) { }
+        try {
+            if (healthServer != null) healthServer.close();
         } catch (IOException ignored) { }
         acceptExecutor.shutdownNow();
+        healthExecutor.shutdownNow();
         installExecutor.shutdownNow();
         super.onDestroy();
     }
