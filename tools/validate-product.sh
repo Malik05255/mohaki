@@ -25,7 +25,7 @@ BANNED_APPS=(
   LocalTransport BackupRestoreConfirmation CaptivePortalLogin WifiDialog
   Development SampleLocationAttribution CtsShimPrebuilt CtsShimPrivPrebuilt
   EmulatedCamera DeviceAsWebcam Uwb UwbService SatelliteService
-  VirtualizationService microdroid microdroid_manager
+  VirtualizationService microdroid microdroid_manager BluetoothMidiService
 )
 
 for app in "${BANNED_APPS[@]}"; do
@@ -42,6 +42,7 @@ BANNED_FILES=(
   '*/bin/thermal-daemon' '*/bin/hcitool' '*/bin/simpleperf' '*/bin/strace'
   '*/bin/virtualizationservice' '*/bin/vm' '*/bin/vm_shell'
   '*/bin/fastboot' '*/bin/lpdump' '*/bin/lpmake' '*/bin/lpadd' '*/bin/lpflash'
+  '*/bin/wpa_supplicant' '*/bin/hostapd' '*/bin/wpa_cli'
   '*/bin/hw/android.hardware.camera.provider.ranchu'
   '*/bin/hw/android.hardware.camera.provider.ranchu_minigbm'
 )
@@ -86,24 +87,58 @@ require_path "Input method" '*/LatinIME*' '*/InputMethod*'
 require_path "ext4 recovery/fsck" '*/bin/e2fsck'
 require_path "Jawal system bridge" '*/JawalSystemBridge*'
 require_path "Jawal Store" '*/JawalStore*'
-require_path "Handheld core features" '*/etc/permissions/handheld_core_hardware.xml'
+require_path "Jawal core hardware profile" '*/etc/permissions/jawal_core_hardware.xml'
 
-if find "$PRODUCT_OUT" -path '*/etc/permissions/tablet_core_hardware.xml' -print -quit | grep -q .; then
-  fail "Tablet core feature declaration leaked into phone product"
-else
-  pass "Tablet core feature declaration removed"
-fi
+# Stock tablet/handheld profiles claim physical hardware Jawal does not expose.
+for leaked in handheld_core_hardware.xml tablet_core_hardware.xml; do
+  if find "$PRODUCT_OUT" -path "*/etc/permissions/$leaked" -print -quit | grep -q .; then
+    fail "Stock hardware profile leaked into JawalOS: $leaked"
+  else
+    pass "Stock hardware profile removed: $leaked"
+  fi
+done
 
+# Optional physical-radio/hardware declarations must not leak back in through an
+# upstream device/product update.
 for feature in \
   '*/etc/permissions/android.hardware.camera*.xml' \
   '*/etc/permissions/android.hardware.nfc*.xml' \
-  '*/etc/permissions/android.hardware.uwb*.xml'; do
+  '*/etc/permissions/android.hardware.uwb*.xml' \
+  '*/etc/permissions/android.hardware.bluetooth*.xml' \
+  '*/etc/permissions/android.hardware.wifi*.xml' \
+  '*/etc/permissions/android.hardware.telephony*.xml'; do
   if find "$PRODUCT_OUT" -path "$feature" -print -quit | grep -q .; then
     fail "Unsupported hardware feature declaration still present: $feature"
   else
     pass "Unsupported hardware feature declaration removed: $feature"
   fi
 done
+
+CORE_PROFILE="$(find "$PRODUCT_OUT" -path '*/etc/permissions/jawal_core_hardware.xml' -print -quit || true)"
+if [[ -n "$CORE_PROFILE" ]]; then
+  FORBIDDEN_FEATURES=(
+    android.hardware.camera
+    android.hardware.bluetooth
+    android.hardware.wifi
+    android.hardware.nfc
+    android.hardware.uwb
+    android.hardware.telephony
+    android.hardware.sensor.accelerometer
+    android.hardware.sensor.compass
+    android.hardware.microphone
+    android.software.telecom
+    android.software.print
+    android.software.backup
+    android.software.companion_device_setup
+  )
+  for feature in "${FORBIDDEN_FEATURES[@]}"; do
+    if grep -Fq "name=\"$feature" "$CORE_PROFILE"; then
+      fail "Unsupported capability declared in Jawal core profile: $feature"
+    else
+      pass "Core profile does not claim: $feature"
+    fi
+  done
+fi
 
 # Stock audio catalogue is intentionally reduced, but audio quality/codec stack
 # remains untouched. Keep only a tiny default selection.
@@ -129,7 +164,7 @@ if [[ -f "$ISO" ]]; then
   if (( mib <= 650 )); then
     pass "Aggressive compressed-image target <= 650 MiB"
   elif (( mib <= 900 )); then
-    warn "Image is above 650 MiB; continue measured pruning from largest-files.tsv"
+    warn "Image is above 650 MiB; continue measured pruning from pruning-plan.md"
   else
     warn "Image is > 900 MiB; another measured pruning pass is required"
   fi
