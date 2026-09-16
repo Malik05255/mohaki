@@ -1,5 +1,7 @@
 #pragma once
 
+#include "RenderBridge.hpp"
+
 #include <windows.h>
 #include <filesystem>
 #include <string>
@@ -11,8 +13,10 @@ struct VmConfig {
     std::filesystem::path runtimeDir;
     std::filesystem::path systemDisk;
     std::filesystem::path dataDisk;
+    std::filesystem::path quickResumeMarker;
     unsigned memoryMb{4096};
     unsigned cpuCores{4};
+    bool resumeQuickState{false};
 };
 
 class VmController final {
@@ -24,13 +28,19 @@ public:
     VmController& operator=(const VmController&) = delete;
 
     bool Start(HWND renderParent, const VmConfig& config, std::wstring* error);
-    void Stop() noexcept;
+    bool SaveQuickResume(const std::filesystem::path& marker, std::wstring* error);
+    void Stop(bool tryQuickResume = false,
+              const std::filesystem::path& marker = {}) noexcept;
+    void Resize() noexcept;
     bool Running() const noexcept;
 
 private:
     std::wstring BuildCommandLine(HWND renderParent, const VmConfig& config) const;
+    bool QmpCommand(const std::string& json, std::string* reply = nullptr) const;
+    bool QmpHumanMonitor(const std::string& command, std::string* reply = nullptr) const;
 
     PROCESS_INFORMATION process_{};
+    RenderBridge renderBridge_{};
 };
 
 } // namespace jawal
