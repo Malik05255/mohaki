@@ -1,4 +1,4 @@
-name: Jawal Full 5-Stage Pipeline
+name: Jawal Full 10-Stage Pipeline
 
 on:
   workflow_dispatch:
@@ -15,9 +15,19 @@ on:
         default: "C:\\Program Files\\qemu"
         type: string
       makensis:
-        description: "Full path to makensis.exe on the Windows builder"
+        description: "Full path to makensis.exe on Windows builders"
         required: true
         default: "C:\\Program Files (x86)\\NSIS\\makensis.exe"
+        type: string
+      apk_corpus_dir:
+        description: "Directory of legal test APKs on the hardware runner for stage 6"
+        required: true
+        default: "C:\\JawalTest\\apk-corpus"
+        type: string
+      arm64_smoke_apk:
+        description: "ARM64-only smoke APK path on the hardware runner (used when native_bridge=libndk)"
+        required: true
+        default: "C:\\JawalTest\\arm64-smoke.apk"
         type: string
 
 concurrency:
@@ -82,7 +92,7 @@ jobs:
           name: jawalos-runtime
           path: dist
 
-      - name: Build Jawal.exe Release
+      - name: Build Jawal Windows binaries Release
         shell: pwsh
         run: |
           cmake -S host -B build/host -G "Visual Studio 17 2022" -A x64
@@ -99,9 +109,10 @@ jobs:
         run: |
           New-Item dist/portable -ItemType Directory -Force | Out-Null
           Copy-Item build/host/Release/Jawal.exe dist/portable/Jawal.exe -Force
+          Copy-Item build/host/Release/JawalPkg.exe dist/portable/JawalPkg.exe -Force
           Copy-Item dist/runtime dist/portable/runtime -Recurse -Force
 
-      - name: Build single-file installer
+      - name: Build single-file installer candidate
         shell: pwsh
         run: ./packaging/build-installer.ps1 -Makensis '${{ inputs.makensis }}'
 
@@ -109,7 +120,7 @@ jobs:
         shell: pwsh
         run: |
           $size = [Math]::Round((Get-Item dist/JawalSetup.exe).Length / 1MB, 1)
-          "### Stage 3`nJawalSetup.exe: **$size MiB**" | Add-Content $env:GITHUB_STEP_SUMMARY
+          "### Stage 3`nJawalSetup.exe candidate: **$size MiB**" | Add-Content $env:GITHUB_STEP_SUMMARY
 
       - name: Upload packaged Jawal
         uses: actions/upload-artifact@v4
@@ -170,3 +181,183 @@ jobs:
         with:
           name: jawal-stage5-report
           path: dist/reports/windows-functional-smoke.json
+
+  stage-6-apk-matrix:
+    name: "6 APK compatibility matrix"
+    needs: stage-5-functional
+    runs-on: [self-hosted, Windows, X64, jawal-windows-hw]
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: jawal-windows-package
+          path: dist
+
+      - name: Run APK install matrix through the production package bridge
+        shell: pwsh
+        run: |
+          ./tools/windows-apk-matrix.ps1 `
+            -JawalExe 'dist/portable/Jawal.exe' `
+            -JawalPkgExe 'dist/portable/JawalPkg.exe' `
+            -ApkDirectory '${{ inputs.apk_corpus_dir }}' `
+            -MinimumPassRate 0.90 `
+            -TimeoutSeconds 240
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: jawal-stage6-apk-matrix
+          path: dist/reports/apk-matrix.json
+
+  stage-7-arm64:
+    name: "7 ARM64 native-bridge gate"
+    needs: stage-6-apk-matrix
+    runs-on: [self-hosted, Windows, X64, jawal-windows-hw]
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: jawal-windows-package
+          path: dist
+
+      - name: ARM64 bridge not requested
+        if: ${{ inputs.native_bridge != 'libndk' }}
+        shell: pwsh
+        run: |
+          New-Item dist/reports -ItemType Directory -Force | Out-Null
+          '{"passed":true,"skipped":true,"reason":"native_bridge=none"}' | Set-Content dist/reports/arm64-smoke.json -Encoding UTF8
+
+      - name: Validate active native bridge and install ARM64-only APK
+        if: ${{ inputs.native_bridge == 'libndk' }}
+        shell: pwsh
+        run: |
+          ./tools/windows-arm64-smoke.ps1 `
+            -JawalExe 'dist/portable/Jawal.exe' `
+            -JawalPkgExe 'dist/portable/JawalPkg.exe' `
+            -Arm64Apk '${{ inputs.arm64_smoke_apk }}' `
+            -TimeoutSeconds 240
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: jawal-stage7-arm64
+          path: dist/reports/arm64-smoke.json
+
+  stage-8-factory-reset:
+    name: "8 Factory reset clean-device lifecycle"
+    needs: stage-7-arm64
+    runs-on: [self-hosted, Windows, X64, jawal-windows-hw]
+    timeout-minutes: 30
+    env:
+      JAWAL_DESTRUCTIVE_TESTS: "1"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: jawal-windows-package
+          path: dist
+
+      - name: Install smoke app, recreate user data, verify clean guest
+        shell: pwsh
+        run: |
+          ./tools/windows-factory-reset-smoke.ps1 `
+            -JawalExe 'dist/portable/Jawal.exe' `
+            -JawalPkgExe 'dist/portable/JawalPkg.exe' `
+            -SmokeApk 'dist/android/JawalSmokeApp.apk' `
+            -TimeoutSeconds 240
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: jawal-stage8-factory-reset
+          path: dist/reports/factory-reset-smoke.json
+
+  stage-9-resilience:
+    name: "9 Forced-stop and data-integrity recovery"
+    needs: stage-8-factory-reset
+    runs-on: [self-hosted, Windows, X64, jawal-windows-hw]
+    timeout-minutes: 45
+    env:
+      JAWAL_DESTRUCTIVE_TESTS: "1"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: jawal-windows-package
+          path: dist
+
+      - name: Force-stop QEMU, check qcow2, reboot and verify data three times
+        shell: pwsh
+        run: |
+          ./tools/windows-resilience-smoke.ps1 `
+            -JawalExe 'dist/portable/Jawal.exe' `
+            -JawalPkgExe 'dist/portable/JawalPkg.exe' `
+            -SmokeApk 'dist/android/JawalSmokeApp.apk' `
+            -Cycles 3 `
+            -TimeoutSeconds 240
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: jawal-stage9-resilience
+          path: dist/reports/resilience-smoke.json
+
+  stage-10-release:
+    name: "10 Signed Release + final size/hash gate"
+    needs: stage-9-resilience
+    runs-on: [self-hosted, Windows, X64, jawal-windows-release]
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: jawal-windows-package
+          path: dist
+
+      - name: Reconstruct packaging layout
+        shell: pwsh
+        run: |
+          New-Item build/host/Release -ItemType Directory -Force | Out-Null
+          Copy-Item dist/portable/Jawal.exe build/host/Release/Jawal.exe -Force
+          if (Test-Path dist/runtime) { Remove-Item dist/runtime -Recurse -Force }
+          Copy-Item dist/portable/runtime dist/runtime -Recurse -Force
+
+      - name: Sign Jawal.exe before embedding it in the installer
+        shell: pwsh
+        run: |
+          ./packaging/sign-release.ps1 `
+            -Paths @('build/host/Release/Jawal.exe') `
+            -CertificateThumbprint $env:JAWAL_SIGNING_CERT_THUMBPRINT `
+            -RequireSigning
+
+      - name: Build installer with signed Jawal.exe
+        shell: pwsh
+        run: ./packaging/build-installer.ps1 -Makensis '${{ inputs.makensis }}'
+
+      - name: Sign final JawalSetup.exe
+        shell: pwsh
+        run: |
+          ./packaging/sign-release.ps1 `
+            -Paths @('dist/JawalSetup.exe') `
+            -CertificateThumbprint $env:JAWAL_SIGNING_CERT_THUMBPRINT `
+            -RequireSigning
+
+      - name: Enforce final size, Authenticode and SHA-256 gates
+        shell: pwsh
+        run: |
+          ./packaging/release-gate.ps1 `
+            -Installer 'dist/JawalSetup.exe' `
+            -JawalExe 'build/host/Release/Jawal.exe' `
+            -RuntimeDir 'dist/runtime' `
+            -MaxInstallerMiB 1200 `
+            -MaxInstalledMiB 3072 `
+            -RequireSignature
+
+      - name: Upload final signed release
+        uses: actions/upload-artifact@v4
+        with:
+          name: jawal-signed-release
+          compression-level: 0
+          retention-days: 30
+          path: |
+            dist/JawalSetup.exe
+            dist/SHA256SUMS.txt
+            dist/reports/release-gate.json
