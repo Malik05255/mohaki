@@ -1,6 +1,7 @@
 # Jawal is a virtual phone runtime, not a BlissOS desktop distribution.
 # The upstream Android-x86 device layer is retained for kernel/HAL/graphics
-# compatibility, while consumer apps and PC-distribution utilities are removed.
+# compatibility, while consumer apps, PC-distribution utilities and bare-metal
+# hardware tools that can never be used inside the fixed QEMU machine are removed.
 
 JAWAL_REMOVE_PACKAGES := \
     7z \
@@ -47,6 +48,7 @@ JAWAL_REMOVE_PACKAGES := \
     Recorder \
     Seedvault \
     Stk \
+    Taskbar \
     ThemePicker \
     ThemesStub \
     TouchGestures \
@@ -55,6 +57,7 @@ JAWAL_REMOVE_PACKAGES := \
     VisualizationWallpapers \
     WallpaperPicker2 \
     WeatherIcons \
+    Eleven \
     awk \
     bash \
     bzip2 \
@@ -79,7 +82,42 @@ JAWAL_REMOVE_PACKAGES := \
     update_engine \
     update_engine_sideload \
     update_verifier \
-    otapreopt_script
+    otapreopt_script \
+    chat \
+    eject \
+    gps.huawei \
+    io_switch \
+    libhuaweigeneric-ril \
+    parted \
+    rtk_hciattach \
+    tablet-mode \
+    v86d \
+    wacom-input \
+    fsck.exfat \
+    fsck.f2fs \
+    make_f2fs \
+    mkfs.exfat \
+    mkntfs \
+    mount.exfat \
+    ntfs-3g \
+    ntfsfix \
+    btattach \
+    btmon \
+    hciconfig \
+    hcitool \
+    thermsys \
+    thermal-daemon \
+    tcpdump \
+    tput \
+    dialog \
+    alsa-info.sh \
+    tree \
+    lspci \
+    dmidecode \
+    vainfo \
+    evtest \
+    efibootmgr \
+    x86_dhcpclient.recovery
 
 PRODUCT_PACKAGES := $(filter-out $(JAWAL_REMOVE_PACKAGES),$(PRODUCT_PACKAGES))
 PRODUCT_PACKAGES_DEBUG := $(filter-out $(JAWAL_REMOVE_PACKAGES),$(PRODUCT_PACKAGES_DEBUG))
