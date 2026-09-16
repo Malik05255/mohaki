@@ -70,6 +70,13 @@ require_path "Package installer" '*/PackageInstaller*' '*/PackageInstallerServic
 require_path "ext4 recovery/fsck" '*/bin/e2fsck'
 require_path "Jawal system bridge" '*/JawalSystemBridge*'
 require_path "Jawal Store" '*/JawalStore*'
+require_path "Handheld core features" '*/etc/permissions/handheld_core_hardware.xml'
+
+if find "$PRODUCT_OUT" -path '*/etc/permissions/tablet_core_hardware.xml' -print -quit | grep -q .; then
+  fail "Tablet core feature declaration leaked into phone product"
+else
+  pass "Tablet core feature declaration removed"
+fi
 
 find "$PRODUCT_OUT" -type f -printf '%s\t%p\n' | sort -nr | head -n 100 > "$REPORT_DIR/largest-files.tsv"
 
