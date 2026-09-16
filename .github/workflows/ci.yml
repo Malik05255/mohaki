@@ -9,16 +9,22 @@ on:
 
 jobs:
   windows-host:
-    # Pin the runner because windows-latest has moved to a VS 2026 image, while
-    # this workflow deliberately uses the widely deployed VS 2022 toolchain.
     runs-on: windows-2022
     steps:
       - uses: actions/checkout@v4
-      - name: Parse PowerShell packaging scripts
+      - name: Parse PowerShell packaging and smoke scripts
         shell: pwsh
         run: |
           $failed = $false
-          foreach ($path in @('packaging/assemble-windows-runtime.ps1', 'packaging/build-installer.ps1')) {
+          foreach ($path in @(
+            'packaging/assemble-windows-runtime.ps1',
+            'packaging/build-installer.ps1',
+            'packaging/verify-runtime.ps1',
+            'tools/probe-guest.ps1',
+            'tools/install-smoke-apk.ps1',
+            'tools/windows-runtime-smoke.ps1',
+            'tools/windows-functional-smoke.ps1'
+          )) {
             $tokens = $null
             $errors = $null
             [System.Management.Automation.Language.Parser]::ParseFile((Resolve-Path $path), [ref]$tokens, [ref]$errors) | Out-Null
@@ -46,5 +52,6 @@ jobs:
         run: |
           bash -n android/scripts/sync-and-build.sh
           bash -n android/scripts/package-runtime.sh
+          bash -n tools/check-android-builder.sh
           bash -n tools/fetch-store.sh
           bash -n tools/validate-product.sh
