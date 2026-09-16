@@ -21,6 +21,8 @@ constexpr int kInitialWidth = 450;
 constexpr int kInitialHeight = 800;
 constexpr UINT kStartRuntimeMessage = WM_APP + 1;
 constexpr UINT kInstallCompleteMessage = WM_APP + 2;
+constexpr UINT kMenuSettings = 0x1101;
+constexpr UINT kMenuFactoryReset = 0x1102;
 
 struct InstallCompletion {
     jawal::PackageInstallResult result;
@@ -191,6 +193,57 @@ void StartRuntime(HWND owner) {
     }
 }
 
+bool FactoryReset(HWND owner) {
+    const int confirm = MessageBoxW(
+        owner,
+        L"سيتم حذف جميع التطبيقات والحسابات والملفات الموجودة داخل جوال وإعادته إلى حالته النظيفة.\n\nإعدادات الأداء في Windows ستبقى كما هي. هل تريد المتابعة؟",
+        L"فورمات جوال",
+        MB_YESNO | MB_DEFBUTTON2 | MB_ICONWARNING | MB_RTLREADING);
+    if (confirm != IDYES) return false;
+
+    gVm.Stop();
+
+    const auto root = ModuleDirectory();
+    const auto runtime = root / L"runtime";
+    const auto dataTemplate = runtime / L"images" / L"jawal-data-template.qcow2";
+    const auto userData = LocalDataDirectory() / L"data.qcow2";
+
+    std::error_code ec;
+    std::filesystem::remove(userData, ec);
+    if (ec && std::filesystem::exists(userData)) {
+        MessageBoxW(owner,
+                    L"تعذر حذف بيانات الجوال الحالية. أغلق أي برنامج يستخدم ملفات Jawal ثم حاول مرة أخرى.",
+                    L"فورمات جوال", MB_OK | MB_ICONERROR | MB_RTLREADING);
+        return false;
+    }
+
+    if (!EnsureDataOverlay(runtime, dataTemplate, userData)) {
+        MessageBoxW(owner,
+                    L"تم حذف البيانات لكن تعذر إنشاء مساحة جوال نظيفة جديدة. تحقق من ملفات Runtime والمساحة الحرة.",
+                    L"فورمات جوال", MB_OK | MB_ICONERROR | MB_RTLREADING);
+        return false;
+    }
+
+    MessageBoxW(owner,
+                L"تمت تهيئة جوال بنجاح. سيبدأ الآن كجهاز Android نظيف بدون التطبيقات والحسابات السابقة.",
+                L"فورمات جوال", MB_OK | MB_ICONINFORMATION | MB_RTLREADING);
+    StartRuntime(owner);
+    return true;
+}
+
+void OpenRuntimeSettings(HWND owner) {
+    const auto settingsPath = LocalDataDirectory() / L"jawal.ini";
+    if (!std::filesystem::exists(settingsPath)) {
+        jawal::LoadRuntimeSettings(LocalDataDirectory());
+    }
+    HINSTANCE result = ShellExecuteW(owner, L"open", settingsPath.c_str(), nullptr, nullptr, SW_SHOWNORMAL);
+    if (reinterpret_cast<INT_PTR>(result) <= 32) {
+        MessageBoxW(owner,
+                    L"تعذر فتح إعدادات جوال.",
+                    L"جوال", MB_OK | MB_ICONERROR | MB_RTLREADING);
+    }
+}
+
 void InstallDroppedApk(HWND owner, std::filesystem::path file) {
     std::thread([owner, file = std::move(file)]() {
         auto* completion = new InstallCompletion{jawal::InstallApk(file), file.filename().wstring()};
@@ -200,16 +253,35 @@ void InstallDroppedApk(HWND owner, std::filesystem::path file) {
     }).detach();
 }
 
+void AddJawalSystemMenu(HWND hwnd) {
+    HMENU menu = GetSystemMenu(hwnd, FALSE);
+    if (!menu) return;
+    AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
+    AppendMenuW(menu, MF_STRING, kMenuSettings, L"إعدادات جوال");
+    AppendMenuW(menu, MF_STRING, kMenuFactoryReset, L"فورمات الجوال");
+}
+
 LRESULT CALLBACK WindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
     switch (msg) {
     case WM_CREATE: {
         DragAcceptFiles(hwnd, TRUE);
+        AddJawalSystemMenu(hwnd);
         gRenderHost = CreateWindowExW(0, L"STATIC", nullptr,
                                       WS_CHILD | WS_VISIBLE | WS_CLIPCHILDREN | WS_CLIPSIBLINGS,
                                       0, 0, 1, 1, hwnd, nullptr, GetModuleHandleW(nullptr), nullptr);
         PostMessageW(hwnd, kStartRuntimeMessage, 0, 0);
         return 0;
     }
+    case WM_SYSCOMMAND:
+        if ((wParam & 0xFFF0u) == kMenuSettings) {
+            OpenRuntimeSettings(hwnd);
+            return 0;
+        }
+        if ((wParam & 0xFFF0u) == kMenuFactoryReset) {
+            FactoryReset(hwnd);
+            return 0;
+        }
+        break;
     case kStartRuntimeMessage:
         StartRuntime(hwnd);
         return 0;
