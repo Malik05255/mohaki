@@ -12,10 +12,21 @@ add_executable(Jawal WIN32
     src/VmController.cpp
 )
 
+add_executable(JawalPkg
+    src/PackageCli.cpp
+    src/PackageBridge.cpp
+)
+
 target_include_directories(Jawal PRIVATE src)
+target_include_directories(JawalPkg PRIVATE src)
+
 target_compile_definitions(Jawal PRIVATE UNICODE _UNICODE NOMINMAX WIN32_LEAN_AND_MEAN)
+target_compile_definitions(JawalPkg PRIVATE UNICODE _UNICODE NOMINMAX WIN32_LEAN_AND_MEAN)
+
 target_link_libraries(Jawal PRIVATE dwmapi shell32 shlwapi ws2_32)
+target_link_libraries(JawalPkg PRIVATE ws2_32)
 
 if(MSVC)
     target_compile_options(Jawal PRIVATE /W4 /permissive- /EHsc)
+    target_compile_options(JawalPkg PRIVATE /W4 /permissive- /EHsc)
 endif()
