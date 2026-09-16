@@ -88,6 +88,29 @@ JAWAL_REMOVE_PACKAGES := \
     EmulatedCamera \
     android.hardware.camera.provider.ranchu \
     android.hardware.camera.provider.ranchu_minigbm \
+    DeviceAsWebcam \
+    Uwb \
+    UwbService \
+    com.android.uwb \
+    SatelliteService \
+    com.android.satellite \
+    VirtualizationService \
+    virtualizationservice \
+    com.android.virt \
+    microdroid \
+    microdroid_manager \
+    vm \
+    vm_shell \
+    fastboot \
+    fastbootd \
+    lpdump \
+    lpadd \
+    lpflash \
+    lpmake \
+    snapshotctl \
+    simpleperf \
+    strace \
+    heapprofd \
     awk \
     bash \
     bzip2 \
@@ -149,6 +172,12 @@ JAWAL_REMOVE_PACKAGES := \
     efibootmgr \
     x86_dhcpclient.recovery
 
+# ADB is useful during bring-up, but it is not part of the shipping Jawal user
+# experience. Keep it in userdebug diagnostics; omit it from production user builds.
+ifeq ($(TARGET_BUILD_VARIANT),user)
+JAWAL_REMOVE_PACKAGES += adbd
+endif
+
 PRODUCT_PACKAGES := $(filter-out $(JAWAL_REMOVE_PACKAGES),$(PRODUCT_PACKAGES))
 PRODUCT_PACKAGES_DEBUG := $(filter-out $(JAWAL_REMOVE_PACKAGES),$(PRODUCT_PACKAGES_DEBUG))
 
@@ -166,6 +195,7 @@ PRODUCT_COPY_FILES := $(filter-out \
     %/android.hardware.nfc.xml:% \
     %/android.hardware.nfc.hce.xml:% \
     %/android.hardware.nfc.hcef.xml:% \
+    %/android.hardware.uwb.xml:% \
     frameworks/native/data/etc/tablet_core_hardware.xml:%,$(PRODUCT_COPY_FILES))
 
 # Keep the normal handheld contract for app/UI selection while omitting
@@ -177,9 +207,9 @@ PRODUCT_COPY_FILES += \
 # DSU, Seedvault/local backup transports, printing and MTP are deliberately out.
 PRODUCT_BUILD_GENERIC_OTA_PACKAGE := false
 
-# Strip Java local-variable debug metadata in production. Stack traces keep
-# source/line information; this reduces image size without changing runtime
-# behavior or application rendering/media quality.
+# Strip Java local-variable and dexpreopt mini-debug metadata. This preserves
+# stack-trace source/line information and has no effect on rendering, codecs,
+# application execution or runtime performance.
 PRODUCT_MINIMIZE_JAVA_DEBUG_INFO := true
 WITH_DEXPREOPT_DEBUG_INFO := false
 
