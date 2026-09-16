@@ -1,7 +1,7 @@
-# Jawal is a virtual phone runtime, not a BlissOS desktop distribution.
-# The upstream Android-x86 device layer is retained for kernel/HAL/graphics
-# compatibility, while consumer apps, PC-distribution utilities and bare-metal
-# hardware tools that can never be used inside the fixed QEMU machine are removed.
+# Jawal is a virtual Android phone runtime, not a general-purpose PC distro.
+# Prune only components that provide no useful function inside Jawal's fixed
+# QEMU/WHPX machine. Compatibility-critical Android framework/media/networking
+# pieces are intentionally kept and validated after every production build.
 
 JAWAL_REMOVE_PACKAGES := \
     7z \
@@ -58,6 +58,38 @@ JAWAL_REMOVE_PACKAGES := \
     WallpaperPicker2 \
     WeatherIcons \
     Eleven \
+    CarrierConfigUI \
+    CellBroadcastReceiver \
+    CellBroadcastService \
+    CellBroadcastApp \
+    EmergencyInfo \
+    MmsService \
+    SimAppDialog \
+    ONS \
+    WAPPushManager \
+    NfcNci \
+    NfcNciApex \
+    Tag \
+    com.android.nfcservices \
+    ManagedProvisioning \
+    CompanionDeviceManager \
+    DynamicSystemInstallationService \
+    MtpService \
+    OsuLogin \
+    SharedStorageBackup \
+    LocalTransport \
+    BackupRestoreConfirmation \
+    CtsShimPrebuilt \
+    CtsShimPrivPrebuilt \
+    CaptivePortalLogin \
+    Tethering \
+    com.android.tethering \
+    WifiDialog \
+    Development \
+    SampleLocationAttribution \
+    EmulatedCamera \
+    android.hardware.camera.provider.ranchu \
+    android.hardware.camera.provider.ranchu_minigbm \
     awk \
     bash \
     bzip2 \
@@ -122,16 +154,37 @@ JAWAL_REMOVE_PACKAGES := \
 PRODUCT_PACKAGES := $(filter-out $(JAWAL_REMOVE_PACKAGES),$(PRODUCT_PACKAGES))
 PRODUCT_PACKAGES_DEBUG := $(filter-out $(JAWAL_REMOVE_PACKAGES),$(PRODUCT_PACKAGES_DEBUG))
 
-# The generic Android-x86 layer advertises tablet core hardware because it also
-# targets bare-metal PCs. Jawal is intentionally a phone-shaped handheld VM, so
-# remove that declaration and publish Android's normal handheld core feature set.
-PRODUCT_COPY_FILES := $(filter-out frameworks/native/data/etc/tablet_core_hardware.xml:%,$(PRODUCT_COPY_FILES))
+# Camera APIs remain in framework for application compatibility, but Jawal v1
+# has no camera passthrough. Remove emulator camera HAL/provider modules and any
+# inherited camera feature declarations so applications receive "no camera"
+# rather than paying for a fake/unused camera implementation.
+PRODUCT_COPY_FILES := $(filter-out \
+    %/android.hardware.camera.xml:% \
+    %/android.hardware.camera.front.xml:% \
+    %/android.hardware.camera.any.xml:% \
+    %/android.hardware.camera.full.xml:% \
+    %/android.hardware.camera.autofocus.xml:% \
+    %/android.hardware.camera.raw.xml:% \
+    %/android.hardware.nfc.xml:% \
+    %/android.hardware.nfc.hce.xml:% \
+    %/android.hardware.nfc.hcef.xml:% \
+    frameworks/native/data/etc/tablet_core_hardware.xml:%,$(PRODUCT_COPY_FILES))
+
+# Keep the normal handheld contract for app/UI selection while omitting
+# hardware-specific features Jawal does not expose.
 PRODUCT_COPY_FILES += \
     frameworks/native/data/etc/handheld_core_hardware.xml:$(TARGET_COPY_OUT_VENDOR)/etc/permissions/handheld_core_hardware.xml
 
-# Jawal owns runtime/image updates at the Windows layer.
+# Windows/Jawal owns runtime updates and full-device backup. Android-side OTA,
+# DSU, Seedvault/local backup transports, printing and MTP are deliberately out.
 PRODUCT_BUILD_GENERIC_OTA_PACKAGE := false
 
+# Strip Java local-variable debug metadata in production. Stack traces keep
+# source/line information; this reduces image size without changing runtime
+# behavior or application rendering/media quality.
+PRODUCT_MINIMIZE_JAVA_DEBUG_INFO := true
+WITH_DEXPREOPT_DEBUG_INFO := false
+
 # App resource/layout selection should behave as a phone even though the
-# underlying PC device support originated from Android-x86 tablet targets.
+# underlying PC support originated from Android-x86 targets.
 PRODUCT_CHARACTERISTICS := phone
