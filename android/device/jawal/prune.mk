@@ -119,6 +119,24 @@ JAWAL_REMOVE_PACKAGES := \
     simpleperf \
     strace \
     heapprofd \
+    wpa_supplicant \
+    wpa_supplicant.conf \
+    wpa_cli \
+    hostapd \
+    hostapd_cli \
+    android.hardware.wifi-service \
+    android.hardware.wifi-service.default \
+    android.hardware.wifi.supplicant-service \
+    android.hardware.wifi.supplicant-service.default \
+    android.hardware.wifi.hostapd-service \
+    android.hardware.wifi.hostapd-service.default \
+    android.hardware.bluetooth-service.default \
+    android.hardware.bluetooth@1.0-service \
+    android.hardware.bluetooth@1.0-impl \
+    android.hardware.bluetooth.audio-impl \
+    audio.bluetooth.default \
+    com.android.btservices \
+    BluetoothMidiService \
     awk \
     bash \
     bzip2 \
@@ -198,6 +216,11 @@ PRODUCT_COPY_FILES := $(filter-out \
     %/android.hardware.nfc.hce.xml:% \
     %/android.hardware.nfc.hcef.xml:% \
     %/android.hardware.uwb.xml:% \
+    %/android.hardware.bluetooth.xml:% \
+    %/android.hardware.bluetooth_le.xml:% \
+    %/android.hardware.wifi.xml:% \
+    %/android.hardware.wifi.direct.xml:% \
+    %/android.hardware.wifi.aware.xml:% \
     %:$(TARGET_COPY_OUT_PRODUCT)/media/audio/alarms/% \
     %:$(TARGET_COPY_OUT_PRODUCT)/media/audio/notifications/% \
     %:$(TARGET_COPY_OUT_PRODUCT)/media/audio/ringtones/% \
