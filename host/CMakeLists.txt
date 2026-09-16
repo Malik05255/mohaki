@@ -8,6 +8,7 @@ set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
 add_executable(Jawal WIN32
     src/main.cpp
     src/PackageBridge.cpp
+    src/RuntimeSettings.cpp
     src/VmController.cpp
 )
 
