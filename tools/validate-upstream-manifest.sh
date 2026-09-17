@@ -13,7 +13,7 @@ cleanup() {
 }
 trap cleanup EXIT
 
-for tool in git repo; do
+for tool in git repo python3; do
   command -v "$tool" >/dev/null 2>&1 || {
     echo "Missing required tool: $tool" >&2
     exit 2
@@ -26,7 +26,21 @@ cd "$WORKDIR"
 # project objects or require Git LFS. The real Android build enables --git-lfs.
 repo init -u "$MANIFEST_URL" -b "$MANIFEST_BRANCH" >/dev/null
 
-before="$(repo list -p)"
+manifest_paths() {
+  local output="$1"
+  repo manifest -o "$output" >/dev/null
+  python3 - "$output" <<'PY'
+import sys
+import xml.etree.ElementTree as ET
+root = ET.parse(sys.argv[1]).getroot()
+for project in root.findall('project'):
+    path = project.get('path') or project.get('name')
+    if path:
+        print(path)
+PY
+}
+
+before="$(manifest_paths "$WORKDIR/resolved-before.xml")"
 
 required_paths=(
   vendor/microg
@@ -70,7 +84,7 @@ cat > .repo/local_manifests/jawal-contract-test.xml <<'XML'
 </manifest>
 XML
 
-after="$(repo list -p)"
+after="$(manifest_paths "$WORKDIR/resolved-after.xml")"
 pruned_paths=(
   device/generic/firmware
   vendor/intel/proprietary/sof-bin
