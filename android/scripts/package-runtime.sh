@@ -5,7 +5,7 @@ ISO="${1:?usage: package-runtime.sh JAWAL_ANDROID_ISO OUTPUT_RUNTIME_DIR}"
 RUNTIME="${2:?usage: package-runtime.sh JAWAL_ANDROID_ISO OUTPUT_RUNTIME_DIR}"
 DATA_GIB="${JAWAL_DATA_GIB:-128}"
 
-for tool in bsdtar qemu-img mkfs.ext4 mount umount truncate; do
+for tool in bsdtar qemu-img mkfs.ext4 mount umount mountpoint truncate python3; do
   command -v "$tool" >/dev/null || { echo "Missing packaging tool: $tool" >&2; exit 2; }
 done
 
