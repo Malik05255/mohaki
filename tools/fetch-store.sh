@@ -5,7 +5,7 @@ set -euo pipefail
 # Jawal; it is fetched for the local image build and its signing certificate is
 # verified before Soong is allowed to package it.
 
-VERSION="${AURORA_VERSION:-4.8.3}"
+VERSION="${AURORA_VERSION:-4.8.4}"
 DEST="${1:-android/store/AuroraStore.apk}"
 API="https://gitlab.com/api/v4/projects/AuroraOSS%2FAuroraStore/releases/${VERSION}"
 EXPECTED_SHA256_CERT="4C626157AD02BDA3401A7263555F68A79663FC3E13A4D4369A12570941AA280F"
