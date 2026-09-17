@@ -64,6 +64,16 @@ jobs:
           echo "" >> "$GITHUB_STEP_SUMMARY"
           echo "## Measured pruning plan" >> "$GITHUB_STEP_SUMMARY"
           cat dist/android/pruning-plan.md >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "## Minimal kernel / firmware profile" >> "$GITHUB_STEP_SUMMARY"
+          cat dist/android/kernel-profile.txt >> "$GITHUB_STEP_SUMMARY"
+          if [[ -s dist/android/kernel-modules.tsv ]]; then
+            echo "" >> "$GITHUB_STEP_SUMMARY"
+            echo "### Largest remaining kernel modules" >> "$GITHUB_STEP_SUMMARY"
+            echo '```text' >> "$GITHUB_STEP_SUMMARY"
+            head -n 30 dist/android/kernel-modules.tsv >> "$GITHUB_STEP_SUMMARY"
+            echo '```' >> "$GITHUB_STEP_SUMMARY"
+          fi
 
       - name: Upload JawalOS runtime and pruning evidence
         uses: actions/upload-artifact@v4
@@ -77,6 +87,8 @@ jobs:
             dist/android/JawalArm64Smoke.apk
             dist/android/validation.txt
             dist/android/hardware-pruning.txt
+            dist/android/kernel-profile.txt
+            dist/android/kernel-modules.tsv
             dist/android/largest-files.tsv
             dist/android/product-files.tsv
             dist/android/size-analysis.json
