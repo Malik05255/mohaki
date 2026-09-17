@@ -4,6 +4,7 @@
 #include "GuestReadiness.hpp"
 
 #include <chrono>
+#include <string>
 
 namespace jawal {
 namespace {
