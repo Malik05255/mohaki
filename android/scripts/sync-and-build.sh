@@ -42,6 +42,20 @@ else
   fi
 fi
 
+# These projects exist only to support arbitrary physical PCs. Jawal's fixed
+# QEMU/WHPX machine uses virtio devices plus emulated HDA/xHCI and needs none of
+# their firmware. Excluding them before repo sync saves builder disk/network in
+# addition to keeping the final product free of dead firmware blobs.
+mkdir -p .repo/local_manifests
+cat > .repo/local_manifests/jawal-minimal-firmware.xml <<'XML'
+<?xml version="1.0" encoding="UTF-8"?>
+<manifest>
+  <remove-project name="device_generic_firmware" />
+  <remove-project name="vendor_intel_proprietary_sof-bin" />
+  <remove-project name="vendor_silead_proprietary_firmware" />
+</manifest>
+XML
+
 repo sync -c --force-sync --no-tags --no-clone-bundle --optimized-fetch --prune -j"${JAWAL_SYNC_JOBS:-8}"
 
 rm -rf device/jawal vendor/jawal
@@ -113,6 +127,7 @@ python3 "$ROOT/tools/analyze-jawalos-size.py" \
   printf 'native_bridge=%s\n' "$NATIVE_BRIDGE"
   printf 'lunch_target=%s\n' "$LUNCH_TARGET"
   printf 'kernel_diffconfig=%s\n' 'device/jawal/jawal-kernel-minimal.config'
+  printf 'physical_firmware_projects=%s\n' 'excluded-before-sync'
 } > "$OUT_DIR/build-metadata.txt"
 
 "$ROOT/tools/validate-product.sh" "$PRODUCT_OUT" "$OUT_DIR"
