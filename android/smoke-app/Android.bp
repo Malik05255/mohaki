@@ -1,0 +1,12 @@
+android_app {
+    name: "JawalSmokeApp",
+    manifest: "AndroidManifest.xml",
+    sdk_version: "current",
+    min_sdk_version: "28",
+    certificate: "testkey",
+    optimize: {
+        enabled: true,
+        shrink: true,
+        optimize: true,
+    },
+}

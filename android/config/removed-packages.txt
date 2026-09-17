@@ -1,0 +1,74 @@
+# Packages/features intentionally omitted from the Jawal production product.
+# Actual omission happens in product/device makefiles; never delete random files
+# after Android is built because hidden framework dependencies are easy to break.
+
+# Stock consumer apps
+Dialer
+Contacts
+Messaging
+Email
+Calendar
+Gallery2
+Music
+Camera2
+Aperture
+DeskClock
+LiveWallpapersPicker
+PhotoTable
+QuickSearchBox
+Recorder
+Browser2
+
+# Physical-phone/network hardware UI that Jawal v1 cannot use
+Stk
+CarrierConfigUI
+CellBroadcastReceiver
+CellBroadcastService
+CellBroadcastApp
+EmergencyInfo
+MmsService
+SimAppDialog
+ONS
+WAPPushManager
+NfcNci
+Tag
+
+# Camera implementation is removed, but camera framework APIs stay so apps
+# receive a normal "no camera" result instead of missing Android APIs.
+EmulatedCamera
+android.hardware.camera.provider.ranchu
+android.hardware.camera.provider.ranchu_minigbm
+
+# Host-owned or irrelevant platform features
+PrintSpooler
+BuiltInPrintService
+ManagedProvisioning
+CompanionDeviceManager
+DynamicSystemInstallationService
+MtpService
+OsuLogin
+SharedStorageBackup
+LocalTransport
+BackupRestoreConfirmation
+CaptivePortalLogin
+Tethering
+WifiDialog
+Seedvault
+BlissUpdater
+
+# Development/test/demo packages
+Development
+SampleLocationAttribution
+CtsShimPrebuilt
+CtsShimPrivPrebuilt
+CubeLiveWallpapers
+EasterEgg
+Traceur
+
+# Bare-metal Android-x86 utilities/filesystems/diagnostics are also stripped by
+# prune.mk because Jawal always boots a fixed QEMU/WHPX virtual machine.
+
+# NEVER remove these for size: ART/Zygote, SurfaceFlinger, SystemUI, Launcher,
+# Settings, PermissionController, PackageInstaller, WebView, DocumentsUI,
+# DownloadProvider, MediaCodec/media services/codecs, Audio, netd/NetworkStack,
+# vold/storage, keystore2, input/IME, Binder or the graphics stack.

@@ -1,0 +1,42 @@
+name: Jawal Upstream Manifest Contract
+
+on:
+  push:
+    branches: [main, jawal-v1]
+    paths:
+      - 'android/scripts/sync-and-build.sh'
+      - 'android/device/jawal/**'
+      - 'tools/validate-upstream-manifest.sh'
+      - '.github/workflows/upstream-manifest.yml'
+  pull_request:
+    branches: [main]
+    paths:
+      - 'android/scripts/sync-and-build.sh'
+      - 'android/device/jawal/**'
+      - 'tools/validate-upstream-manifest.sh'
+      - '.github/workflows/upstream-manifest.yml'
+  workflow_dispatch:
+
+jobs:
+  manifest-contract:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install repo launcher
+        run: |
+          mkdir -p "$HOME/.local/bin"
+          curl --fail --location --retry 3 \
+            https://storage.googleapis.com/git-repo-downloads/repo \
+            -o "$HOME/.local/bin/repo"
+          chmod +x "$HOME/.local/bin/repo"
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+
+      - name: Parse manifest contract gate
+        run: bash -n tools/validate-upstream-manifest.sh
+
+      - name: Verify BlissOS QPR2 source contract without syncing AOSP
+        env:
+          JAWAL_ANDROID_BRANCH: voyager-x86-qpr2
+        run: bash tools/validate-upstream-manifest.sh

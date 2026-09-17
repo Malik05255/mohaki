@@ -1,0 +1,193 @@
+name: Jawal CI
+
+on:
+  push:
+    branches: [main, jawal-v1]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  windows-host:
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@v4
+      - name: Parse PowerShell packaging and smoke scripts
+        shell: pwsh
+        run: |
+          $failed = $false
+          foreach ($path in @(
+            'packaging/assemble-windows-runtime.ps1',
+            'packaging/build-installer.ps1',
+            'packaging/verify-runtime.ps1',
+            'packaging/sign-release.ps1',
+            'packaging/release-gate.ps1',
+            'tools/probe-guest.ps1',
+            'tools/install-smoke-apk.ps1',
+            'tools/windows-runtime-smoke.ps1',
+            'tools/windows-gpu-smoke.ps1',
+            'tools/windows-quick-resume-smoke.ps1',
+            'tools/windows-functional-smoke.ps1',
+            'tools/windows-apk-matrix.ps1',
+            'tools/windows-arm64-smoke.ps1',
+            'tools/windows-factory-reset-smoke.ps1',
+            'tools/windows-resilience-smoke.ps1'
+          )) {
+            $tokens = $null
+            $errors = $null
+            [System.Management.Automation.Language.Parser]::ParseFile((Resolve-Path $path), [ref]$tokens, [ref]$errors) | Out-Null
+            if ($errors.Count -gt 0) {
+              $failed = $true
+              $errors | ForEach-Object { Write-Error "$path : $($_.Message)" }
+            }
+          }
+          if ($failed) { exit 1 }
+      - name: Configure Jawal host
+        run: cmake -S host -B build/host -G "Visual Studio 17 2022" -A x64
+      - name: Build Jawal host
+        run: cmake --build build/host --config Release --parallel
+      - name: Exercise strict PE dependency scanner on built Windows binaries
+        shell: pwsh
+        run: |
+          $system32 = Join-Path $env:SystemRoot 'System32'
+          python tools/pe-dependency-closure.py build/host/Release Jawal.exe JawalPkg.exe `
+            --system-dir $system32 `
+            --strict-local `
+            --json build/host/pe-smoke.json
+          if ($LASTEXITCODE -ne 0) { throw 'Jawal host has an unresolved non-system DLL dependency.' }
+          if (-not (Test-Path build/host/pe-smoke.json)) { throw 'PE dependency scanner did not emit its report.' }
+          Get-Content build/host/pe-smoke.json
+      - name: Upload host binaries
+        uses: actions/upload-artifact@v4
+        with:
+          name: jawal-host-windows-x64
+          path: |
+            build/host/Release/Jawal.exe
+            build/host/Release/JawalPkg.exe
+            build/host/pe-smoke.json
+
+  scripts:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Parse shell and Python build tooling
+        run: |
+          bash -n android/scripts/sync-and-build.sh
+          bash -n android/scripts/package-runtime.sh
+          bash -n tools/setup-android-builder.sh
+          bash -n tools/check-android-builder.sh
+          bash -n tools/fetch-store.sh
+          bash -n tools/validate-product.sh
+          bash -n tools/validate-hardware-pruning.sh
+          bash -n tools/validate-kernel-profile.sh
+          bash -n tools/build-arm64-smoke.sh
+          python3 -m py_compile tools/analyze-jawalos-size.py
+          python3 -m py_compile tools/enforce-pruning-budget.py
+          python3 -m py_compile tools/pe-dependency-closure.py
+          python3 -m py_compile tools/apply-jawal-upstream-pruning.py
+          python3 -m py_compile tools/apply-jawal-product-pruning.py
+
+      - name: Exercise OTA and recovery source pruning
+        run: |
+          root=build/product-pruning-fixture
+          mkdir -p "$root/device/generic/common"
+          cat > "$root/device/generic/common/device.mk" <<'MAKEFILE'
+          PRODUCT_BUILD_GENERIC_OTA_PACKAGE := true
+          AB_OTA_POSTINSTALL_CONFIG += \
+              RUN_POSTINSTALL_system=true \
+              POSTINSTALL_PATH_system=system/bin/otapreopt_script \
+              FILESYSTEM_TYPE_system=ext4 \
+              POSTINSTALL_OPTIONAL_system=true
+          PRODUCT_PACKAGES += \
+              otapreopt_script
+          PRODUCT_PACKAGES_DEBUG += \
+              bootctl
+          PRODUCT_PACKAGES += \
+              update_engine \
+              update_engine_sideload \
+              update_verifier
+          PRODUCT_PACKAGES_DEBUG += \
+              update_engine_client
+          # Recovery
+          PRODUCT_COPY_FILES += \
+              $(if $(wildcard $(PRODUCT_DIR)init.recovery.$(TARGET_PRODUCT).rc),$(PRODUCT_DIR)init.recovery.$(TARGET_PRODUCT).rc,$(LOCAL_PATH)/init.recovery.x86.rc):$(TARGET_COPY_OUT_RECOVERY)/root/init.recovery.$(TARGET_PRODUCT).rc \
+              $(if $(wildcard $(PRODUCT_DIR)init.recovery.sh),$(PRODUCT_DIR),$(LOCAL_PATH)/)init.recovery.sh:$(TARGET_COPY_OUT_RECOVERY)/root/system/etc/init.recovery.sh \
+              $(if $(wildcard $(PRODUCT_DIR)init.fstab.sh),$(PRODUCT_DIR),$(LOCAL_PATH)/)init.fstab.sh:$(TARGET_COPY_OUT_RECOVERY)/root/system/etc/init.fstab.sh \
+          $(call inherit-product-if-exists,external/tslib/tslib.mk)
+          MAKEFILE
+          python3 tools/apply-jawal-product-pruning.py "$root"
+          grep -q '^PRODUCT_BUILD_GENERIC_OTA_PACKAGE := false$' "$root/device/generic/common/device.mk"
+          if grep -Eq 'update_engine|otapreopt_script|TARGET_COPY_OUT_RECOVERY|bootctl|external/tslib' "$root/device/generic/common/device.mk"; then
+            echo "OTA/recovery/physical-input source pruning left dead machinery in the fixture." >&2
+            cat "$root/device/generic/common/device.mk"
+            exit 1
+          fi
+
+      - name: Exercise measured pruning budget gate
+        run: |
+          mkdir -p build/pruning-gate
+          cat > build/pruning-gate/pass.json <<'JSON'
+          {
+            "measuredPruning": {
+              "tierATotalMiB": 8.5,
+              "largestTierAFileMiB": 2.25
+            },
+            "safeReviewCandidates": []
+          }
+          JSON
+          python3 tools/enforce-pruning-budget.py build/pruning-gate/pass.json \
+            --max-tier-a-total-mib 12 --max-tier-a-file-mib 4
+
+          cat > build/pruning-gate/fail.json <<'JSON'
+          {
+            "measuredPruning": {
+              "tierATotalMiB": 20.0,
+              "largestTierAFileMiB": 7.0
+            },
+            "safeReviewCandidates": [
+              {"sizeMiB": 7.0, "path": "product/app/UnusedDemo/UnusedDemo.apk"}
+            ]
+          }
+          JSON
+          if python3 tools/enforce-pruning-budget.py build/pruning-gate/fail.json \
+            --max-tier-a-total-mib 12 --max-tier-a-file-mib 4; then
+            echo "Expected pruning gate to reject oversized Tier A candidates." >&2
+            exit 1
+          fi
+
+      - name: Exercise minimal kernel and firmware gate
+        run: |
+          product=build/kernel-gate/product
+          reports=build/kernel-gate/reports
+          mkdir -p "$product/obj/kernel" "$reports"
+          cat > "$product/obj/kernel/.config" <<'KCONFIG'
+          CONFIG_VIRTIO=y
+          CONFIG_VIRTIO_PCI=y
+          CONFIG_VIRTIO_NET=m
+          CONFIG_VIRTIO_BLK=y
+          CONFIG_DRM_VIRTIO_GPU=m
+          CONFIG_HW_RANDOM_VIRTIO=m
+          CONFIG_USB_XHCI_HCD=y
+          CONFIG_USB_HID=y
+          CONFIG_HID_GENERIC=y
+          CONFIG_INPUT_EVDEV=y
+          # CONFIG_BT is not set
+          # CONFIG_WLAN is not set
+          # CONFIG_CFG80211 is not set
+          # CONFIG_MAC80211 is not set
+          # CONFIG_NFC is not set
+          # CONFIG_WWAN is not set
+          # CONFIG_DRM_I915 is not set
+          # CONFIG_DRM_AMDGPU is not set
+          # CONFIG_DRM_NOUVEAU is not set
+          # CONFIG_NET_VENDOR_INTEL is not set
+          # CONFIG_NET_VENDOR_REALTEK is not set
+          KCONFIG
+          bash tools/validate-kernel-profile.sh "$product" "$reports"
+
+          mkdir -p "$product/vendor/firmware/intel"
+          printf 'dead-weight' > "$product/vendor/firmware/intel/physical.bin"
+          if bash tools/validate-kernel-profile.sh "$product" "$reports"; then
+            echo "Expected kernel gate to reject physical firmware leakage." >&2
+            exit 1
+          fi
