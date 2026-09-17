@@ -1,5 +1,7 @@
 #include "VmController.hpp"
 
+#include "RuntimeIntegrity.hpp"
+
 #include <winsock2.h>
 #include <ws2tcpip.h>
 
@@ -61,6 +63,22 @@ std::string EscapeJson(const std::string& value) {
         out.push_back(c);
     }
     return out;
+}
+
+bool QuickResumeMatchesRuntime(const std::filesystem::path& marker,
+                               const std::filesystem::path& runtimeDir) {
+    if (marker.empty() || !std::filesystem::exists(marker)) return false;
+
+    std::string fingerprint;
+    if (!RuntimeManifestFingerprint(runtimeDir, &fingerprint)) return false;
+
+    std::ifstream input(marker);
+    if (!input) return false;
+
+    std::string version;
+    std::string runtimeLine;
+    if (!std::getline(input, version) || !std::getline(input, runtimeLine)) return false;
+    return version == "jawal_quick_resume_v2" && runtimeLine == "runtime=" + fingerprint;
 }
 
 } // namespace
@@ -184,18 +202,27 @@ bool VmController::QmpHumanMonitor(const std::string& command, std::string* repl
 bool VmController::Start(HWND renderParent, const VmConfig& config, std::wstring* error) {
     if (Running()) return true;
 
-    const auto kernel = config.runtimeDir / L"android" / L"kernel";
-    const auto initrd = config.runtimeDir / L"android" / L"initrd.img";
-    if (!std::filesystem::exists(config.qemuExe) ||
+    VmConfig effective = config;
+    if (effective.resumeQuickState &&
+        !QuickResumeMatchesRuntime(effective.quickResumeMarker, effective.runtimeDir)) {
+        std::error_code ec;
+        if (!effective.quickResumeMarker.empty()) std::filesystem::remove(effective.quickResumeMarker, ec);
+        effective.resumeQuickState = false;
+    }
+
+    const auto kernel = effective.runtimeDir / L"android" / L"kernel";
+    const auto initrd = effective.runtimeDir / L"android" / L"initrd.img";
+    if (!std::filesystem::exists(effective.qemuExe) ||
         !std::filesystem::exists(kernel) ||
         !std::filesystem::exists(initrd) ||
-        !std::filesystem::exists(config.systemDisk) ||
-        !std::filesystem::exists(config.dataDisk)) {
+        !std::filesystem::exists(effective.systemDisk) ||
+        !std::filesystem::exists(effective.dataDisk)) {
         if (error) *error = L"حزمة تشغيل جوال غير مكتملة.";
         return false;
     }
 
-    std::wstring command = BuildCommandLine(renderParent, config);
+    runtimeDir_ = effective.runtimeDir;
+    std::wstring command = BuildCommandLine(renderParent, effective);
     std::vector<wchar_t> mutableCommand(command.begin(), command.end());
     mutableCommand.push_back(L'\0');
 
@@ -204,11 +231,12 @@ bool VmController::Start(HWND renderParent, const VmConfig& config, std::wstring
 
     PROCESS_INFORMATION pi{};
     const BOOL created = CreateProcessW(
-        config.qemuExe.c_str(), mutableCommand.data(), nullptr, nullptr, FALSE,
+        effective.qemuExe.c_str(), mutableCommand.data(), nullptr, nullptr, FALSE,
         CREATE_NO_WINDOW | CREATE_UNICODE_ENVIRONMENT, nullptr,
-        config.runtimeDir.c_str(), &startup, &pi);
+        effective.runtimeDir.c_str(), &startup, &pi);
 
     if (!created) {
+        runtimeDir_.clear();
         if (error) *error = L"تعذر تشغيل Android. خطأ Windows: " + std::to_wstring(GetLastError());
         return false;
     }
@@ -217,16 +245,16 @@ bool VmController::Start(HWND renderParent, const VmConfig& config, std::wstring
     CloseHandle(process_.hThread);
     process_.hThread = nullptr;
 
-    HWND vmWindow = WaitForVmWindow(process_.dwProcessId, std::chrono::seconds(config.resumeQuickState ? 8 : 15));
+    HWND vmWindow = WaitForVmWindow(process_.dwProcessId,
+                                    std::chrono::seconds(effective.resumeQuickState ? 8 : 15));
     if (!vmWindow) {
-        const bool retryCold = config.resumeQuickState;
+        const bool retryCold = effective.resumeQuickState;
         Stop(false);
         if (retryCold) {
             std::error_code ec;
-            if (!config.quickResumeMarker.empty()) std::filesystem::remove(config.quickResumeMarker, ec);
-            VmConfig cold = config;
-            cold.resumeQuickState = false;
-            return Start(renderParent, cold, error);
+            if (!effective.quickResumeMarker.empty()) std::filesystem::remove(effective.quickResumeMarker, ec);
+            effective.resumeQuickState = false;
+            return Start(renderParent, effective, error);
         }
         if (error) *error = L"بدأ Android لكن سطح العرض المسرّع لم يظهر.";
         return false;
@@ -241,7 +269,13 @@ bool VmController::Start(HWND renderParent, const VmConfig& config, std::wstring
 }
 
 bool VmController::SaveQuickResume(const std::filesystem::path& marker, std::wstring* error) {
-    if (!Running()) return false;
+    if (!Running() || runtimeDir_.empty()) return false;
+
+    // Remove the previous authorization marker before touching VM state. If
+    // savevm fails or Windows exits mid-save, a stale marker can never make the
+    // next launch attempt an old/incomplete snapshot.
+    std::error_code ec;
+    std::filesystem::remove(marker, ec);
 
     std::string ignored;
     QmpHumanMonitor("delvm jawal_quick_resume", &ignored);
@@ -252,15 +286,21 @@ bool VmController::SaveQuickResume(const std::filesystem::path& marker, std::wst
         return false;
     }
 
-    std::error_code ec;
+    std::string fingerprint;
+    if (!RuntimeManifestFingerprint(runtimeDir_, &fingerprint)) {
+        if (error) *error = L"تم حفظ Snapshot لكن تعذر ربطه بإصدار Runtime الحالي.";
+        return false;
+    }
+
     std::filesystem::create_directories(marker.parent_path(), ec);
     std::ofstream out(marker, std::ios::trunc);
     if (!out) {
         if (error) *error = L"تم حفظ Snapshot لكن تعذر إنشاء علامة الاستئناف.";
         return false;
     }
-    out << "jawal_quick_resume\n";
-    return true;
+    out << "jawal_quick_resume_v2\n"
+        << "runtime=" << fingerprint << "\n";
+    return out.good();
 }
 
 void VmController::Stop(bool tryQuickResume, const std::filesystem::path& marker) noexcept {
@@ -290,6 +330,7 @@ void VmController::Stop(bool tryQuickResume, const std::filesystem::path& marker
 
     CloseHandle(process_.hProcess);
     process_ = {};
+    runtimeDir_.clear();
 }
 
 void VmController::Resize() noexcept {
