@@ -46,10 +46,15 @@ jobs:
         run: cmake -S host -B build/host -G "Visual Studio 17 2022" -A x64
       - name: Build Jawal host
         run: cmake --build build/host --config Release --parallel
-      - name: Exercise PE dependency scanner on built Windows binaries
+      - name: Exercise strict PE dependency scanner on built Windows binaries
         shell: pwsh
         run: |
-          python tools/pe-dependency-closure.py build/host/Release Jawal.exe JawalPkg.exe --json build/host/pe-smoke.json
+          $system32 = Join-Path $env:SystemRoot 'System32'
+          python tools/pe-dependency-closure.py build/host/Release Jawal.exe JawalPkg.exe `
+            --system-dir $system32 `
+            --strict-local `
+            --json build/host/pe-smoke.json
+          if ($LASTEXITCODE -ne 0) { throw 'Jawal host has an unresolved non-system DLL dependency.' }
           if (-not (Test-Path build/host/pe-smoke.json)) { throw 'PE dependency scanner did not emit its report.' }
           Get-Content build/host/pe-smoke.json
       - name: Upload host binaries
