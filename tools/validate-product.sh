@@ -46,6 +46,12 @@ BANNED_FILES=(
   '*/bin/hw/android.hardware.camera.provider.ranchu'
   '*/bin/hw/android.hardware.camera.provider.ranchu_minigbm'
   '*/bootanimation.zip'
+  '*/etc/external_camera_config.xml'
+  '*/etc/wifi/wpa_supplicant.conf'
+  '*/etc/wifi/wpa_supplicant_overlay.conf'
+  '*/etc/ppp/peers/gprs'
+  '*/vendor/etc/pci.ids'
+  '*/vendor/etc/usb.ids'
 )
 
 for pattern in "${BANNED_FILES[@]}"; do
@@ -113,7 +119,10 @@ for feature in \
   '*/etc/permissions/android.hardware.uwb*.xml' \
   '*/etc/permissions/android.hardware.bluetooth*.xml' \
   '*/etc/permissions/android.hardware.wifi*.xml' \
-  '*/etc/permissions/android.hardware.telephony*.xml'; do
+  '*/etc/permissions/android.hardware.telephony*.xml' \
+  '*/etc/permissions/android.hardware.location*.xml' \
+  '*/etc/permissions/android.hardware.sensor.*.xml' \
+  '*/etc/permissions/android.hardware.fingerprint*.xml'; do
   if find "$PRODUCT_OUT" -path "$feature" -print -quit | grep -q .; then
     fail "Unsupported hardware feature declaration still present: $feature"
   else
@@ -130,6 +139,8 @@ if [[ -n "$CORE_PROFILE" ]]; then
     android.hardware.nfc
     android.hardware.uwb
     android.hardware.telephony
+    android.hardware.location
+    android.hardware.fingerprint
     android.hardware.sensor.accelerometer
     android.hardware.sensor.compass
     android.software.telecom
