@@ -2,9 +2,9 @@
 """Apply guarded, Jawal-specific reductions to the synced Android-x86 device tree.
 
 The synced Bliss/Android-Generic source targets arbitrary physical PCs. Jawal is a
-fixed QEMU/WHPX virtual phone, so Bluetooth/GPS physical hardware, generic sensor
-HALs and their physical-PC init paths are dead weight. Patches are exact and fail
-closed when upstream changes, preventing silent edits to unexpected source.
+fixed QEMU/WHPX virtual phone, so physical Bluetooth/GPS/sensor stacks, physical
+GPU driver families and their PC init paths are dead weight. Patches are exact
+and fail closed when upstream changes, preventing silent edits to unexpected source.
 """
 from __future__ import annotations
 
@@ -46,8 +46,29 @@ def main() -> int:
     replacements = [
         (board, "BOARD_HAVE_BLUETOOTH := true", "BOARD_HAVE_BLUETOOTH := false", "disable physical Bluetooth board support"),
         (board, "BOARD_HAVE_BLUETOOTH_LINUX := true", "BOARD_HAVE_BLUETOOTH_LINUX := false", "disable Linux Bluetooth vendor support"),
+        (board, "BOARD_HAVE_BLUETOOTH_INTEL_ICNV := true", "BOARD_HAVE_BLUETOOTH_INTEL_ICNV := false", "disable Intel physical Bluetooth support"),
         (board, "BUILD_WITH_ALSA_UTILS ?= true", "BUILD_WITH_ALSA_UTILS ?= false", "omit ALSA command-line utilities while retaining audio HAL"),
         (board, "BOARD_HAS_GPS_HARDWARE ?= true", "BOARD_HAS_GPS_HARDWARE ?= false", "disable physical GPS board support"),
+        (
+            board,
+            "BOARD_GPU_DRIVERS ?= crocus i915 iris freedreno panfrost nouveau r300g r600g radeonsi virgl vmwgfx",
+            "BOARD_GPU_DRIVERS ?= virgl",
+            "build only the virtual GPU driver exposed by QEMU",
+        ),
+        (
+            board,
+            "BOARD_MESA3D_GALLIUM_DRIVERS := crocus iris i915 nouveau r600 radeonsi svga virgl zink softpipe llvmpipe",
+            "BOARD_MESA3D_GALLIUM_DRIVERS := virgl zink softpipe llvmpipe",
+            "drop physical Mesa Gallium GPU families",
+        ),
+        (
+            board,
+            "BOARD_MESA3D_VULKAN_DRIVERS := amd intel intel_hasvk virtio swrast nouveau",
+            "BOARD_MESA3D_VULKAN_DRIVERS := virtio swrast",
+            "drop physical Vulkan GPU families",
+        ),
+        (board, "BOARD_USE_LIBVA_INTEL_DRIVER := true", "BOARD_USE_LIBVA_INTEL_DRIVER := false", "disable Intel VA driver under Virtio GPU"),
+        (board, "BOARD_USES_MINIGBM_INTEL := true", "BOARD_USES_MINIGBM_INTEL := false", "disable Intel-only minigbm backend"),
         (
             device,
             "$(call inherit-product-if-exists,device/common/gps/gps_as.mk)",
