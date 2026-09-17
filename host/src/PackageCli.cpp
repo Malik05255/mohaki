@@ -1,3 +1,4 @@
+#include "DeviceMaintenance.hpp"
 #include "PackageBridge.hpp"
 
 #include <filesystem>
@@ -36,7 +37,17 @@ void Usage() {
         << L"  JawalPkg process <package>\n"
         << L"  JawalPkg gpu-result\n"
         << L"  JawalPkg arm64-reset\n"
-        << L"  JawalPkg arm64-result\n";
+        << L"  JawalPkg arm64-result\n"
+        << L"  JawalPkg backup-data <runtime-dir> <data-dir>\n"
+        << L"  JawalPkg restore-data <runtime-dir> <data-dir>\n"
+        << L"  JawalPkg compact-data <runtime-dir> <data-dir>\n";
+}
+
+int PrintMaintenanceResult(const jawal::MaintenanceResult& result) {
+    std::wcout << result.detail;
+    if (!result.artifact.empty()) std::wcout << L"\nartifact=" << result.artifact.wstring();
+    std::wcout << L"\n";
+    return result.ok ? 0 : 9;
 }
 
 } // namespace
@@ -66,6 +77,22 @@ int wmain(int argc, wchar_t** argv) {
         const auto result = jawal::SendFileToGuest(std::filesystem::path(argv[2]));
         std::wcout << result.detail << L"\n";
         return result.success() ? 0 : 7;
+    }
+
+    // Offline maintenance commands intentionally share DeviceMaintenance.cpp
+    // with Jawal.exe. Production hardware tests can therefore validate the
+    // exact backup/restore/compaction implementation without automating menus.
+    if (_wcsicmp(argv[1], L"backup-data") == 0 && argc == 4) {
+        return PrintMaintenanceResult(jawal::CreateDataBackup(
+            std::filesystem::path(argv[2]), std::filesystem::path(argv[3])));
+    }
+    if (_wcsicmp(argv[1], L"restore-data") == 0 && argc == 4) {
+        return PrintMaintenanceResult(jawal::RestoreLatestDataBackup(
+            std::filesystem::path(argv[2]), std::filesystem::path(argv[3])));
+    }
+    if (_wcsicmp(argv[1], L"compact-data") == 0 && argc == 4) {
+        return PrintMaintenanceResult(jawal::CheckAndCompactData(
+            std::filesystem::path(argv[2]), std::filesystem::path(argv[3])));
     }
 
     std::string command;
