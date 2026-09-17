@@ -47,6 +47,7 @@ private:
 
     PROCESS_INFORMATION process_{};
     RenderBridge renderBridge_{};
+    std::filesystem::path runtimeDir_{};
 };
 
 } // namespace jawal
