@@ -174,7 +174,11 @@ public final class BridgeService extends Service {
         final boolean touchscreen = pm.hasSystemFeature("android.hardware.touchscreen");
         final boolean portrait = pm.hasSystemFeature("android.hardware.screen.portrait");
         final boolean audioOutput = pm.hasSystemFeature("android.hardware.audio.output");
+        final boolean microphone = pm.hasSystemFeature("android.hardware.microphone");
         final boolean smokeInstalled = isPackageInstalled(pm, "com.jawal.smoke");
+        final int densityDpi = getResources().getDisplayMetrics().densityDpi;
+        final int smallestScreenWidthDp = getResources().getConfiguration().smallestScreenWidthDp;
+        final String buildCharacteristics = SystemProperties.get("ro.build.characteristics", "");
 
         final StringBuilder abis = new StringBuilder();
         for (int index = 0; index < Build.SUPPORTED_ABIS.length; ++index) {
@@ -190,10 +194,14 @@ public final class BridgeService extends Service {
                 "\"release\":\"" + escapeJson(Build.VERSION.RELEASE) + "\"," +
                 "\"abis\":\"" + escapeJson(abis.toString()) + "\"," +
                 "\"nativeBridge\":\"" + escapeJson(nativeBridge) + "\"," +
+                "\"buildCharacteristics\":\"" + escapeJson(buildCharacteristics) + "\"," +
+                "\"densityDpi\":" + densityDpi + "," +
+                "\"smallestScreenWidthDp\":" + smallestScreenWidthDp + "," +
                 "\"webview\":\"" + escapeJson(webViewPackage) + "\"," +
                 "\"networkInternet\":" + networkInternet + "," +
                 "\"networkValidated\":" + networkValidated + "," +
                 "\"audioOutput\":" + audioOutput + "," +
+                "\"microphone\":" + microphone + "," +
                 "\"touchscreen\":" + touchscreen + "," +
                 "\"portrait\":" + portrait + "," +
                 "\"smokeInstalled\":" + smokeInstalled + "," +
