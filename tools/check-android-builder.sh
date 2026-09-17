@@ -4,8 +4,10 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 AOSP_DIR="${JAWAL_AOSP_DIR:-$ROOT/.work/android-src}"
 REPORT="${JAWAL_BUILDER_REPORT:-$ROOT/dist/preflight/android-builder.json}"
-MIN_RAM_GIB="${JAWAL_MIN_BUILD_RAM_GIB:-20}"
-MIN_DISK_GIB="${JAWAL_MIN_BUILD_DISK_GIB:-220}"
+# BlissOS voyager-x86-qpr2 documents 24 GiB RAM (30 GiB in a VM) and a 250 GiB
+# build disk. Do not start a multi-hour sync/build below the upstream baseline.
+MIN_RAM_GIB="${JAWAL_MIN_BUILD_RAM_GIB:-24}"
+MIN_DISK_GIB="${JAWAL_MIN_BUILD_DISK_GIB:-250}"
 MIN_CORES="${JAWAL_MIN_BUILD_CORES:-4}"
 
 mkdir -p "$AOSP_DIR" "$(dirname "$REPORT")"
@@ -61,8 +63,8 @@ case "$fs_type" in
     warnings+=("AOSP workspace is on $fs_type; local SSD/NVMe storage is strongly preferred")
     ;;
 esac
-if (( ram_gib < 24 && swap_gib == 0 )); then
-  warnings+=("builder has under 24 GiB RAM and no swap; upstream BlissOS recommends 24 GiB RAM")
+if (( ram_gib < 30 && swap_gib == 0 )); then
+  warnings+=("builder has under 30 GiB RAM and no swap; BlissOS recommends 30 GiB when the builder itself is virtualized")
 fi
 
 # Tools required by BlissOS voyager-x86-qpr2 plus Jawal's post-build runtime
