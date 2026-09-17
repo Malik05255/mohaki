@@ -64,13 +64,11 @@ XML
 rm -f .repo/local_manifests/jawal-minimal-firmware.xml
 
 # Fail before downloading the Android source if the requested service tree is
-# absent from the resolved manifest. voyager-x86-qpr2 currently syncs the Bliss
-# microG vendor project even though its x86 vendor/bliss overlay does not always
-# wire the product inheritance itself; Jawal handles that explicitly in its
-# product makefile.
+# absent from the resolved manifest. `repo list` only sees checked-out projects,
+# so use the resolved XML here because this check intentionally runs pre-sync.
 if [[ "$BUILD_VARIANT" == "microg" ]]; then
-  manifest_paths_before_sync="$(repo list -p 2>/dev/null || true)"
-  if ! grep -Fxq 'vendor/microg' <<<"$manifest_paths_before_sync"; then
+  resolved_manifest_before_sync="$(repo manifest)"
+  if ! grep -Eq '<project[^>]+path="vendor/microg"([[:space:]/>])' <<<"$resolved_manifest_before_sync"; then
     echo "microG build requested but vendor/microg is absent from the resolved $MANIFEST_BRANCH manifest." >&2
     echo "Refusing to start a large repo sync that cannot produce the requested service variant." >&2
     exit 8
