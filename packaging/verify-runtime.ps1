@@ -1,6 +1,7 @@
 param(
     [string]$RuntimeDir = "dist/runtime",
     [int]$MaximumUncompressedMiB = 3200,
+    [int]$MaximumQemuMiB = 250,
     [string]$ReportPath = "dist/reports/runtime-verification.json"
 )
 
@@ -16,6 +17,7 @@ $required = @(
     "images\jawal-data-template.qcow2",
     "qemu\qemu-system-x86_64.exe",
     "qemu\qemu-img.exe",
+    "firmware\edk2-x86_64-code.fd",
     "runtime.sha256"
 )
 foreach ($relative in $required) {
@@ -25,8 +27,8 @@ foreach ($relative in $required) {
     }
 }
 
-# runtime.sha256 is generated before the Windows QEMU files are added, so it
-# intentionally covers the immutable Android payload only.
+# The final manifest is regenerated after Android, minimal QEMU DLLs and firmware
+# are assembled. Every listed immutable runtime file must verify before release.
 $hashResults = @()
 Get-Content -LiteralPath $manifest | ForEach-Object {
     if ($_ -notmatch '^([0-9a-fA-F]{64})\s+(.+)$') { return }
@@ -41,6 +43,36 @@ Get-Content -LiteralPath $manifest | ForEach-Object {
         throw "SHA-256 mismatch for $relative"
     }
     $hashResults += [ordered]@{ file = $relative; sha256 = $actual; passed = $true }
+}
+if ($hashResults.Count -lt 7) {
+    throw "Runtime integrity manifest is unexpectedly small ($($hashResults.Count) entries)."
+}
+
+$qemuDir = Join-Path $runtime "qemu"
+$qemuFiles = @(Get-ChildItem -LiteralPath $qemuDir -File)
+$qemuBytes = ($qemuFiles | Measure-Object Length -Sum).Sum
+if ($null -eq $qemuBytes) { $qemuBytes = 0 }
+$qemuMiB = [Math]::Round($qemuBytes / 1MB, 1)
+if ($qemuMiB -gt $MaximumQemuMiB) {
+    throw "Minimal QEMU payload is $qemuMiB MiB, above the $MaximumQemuMiB MiB ceiling."
+}
+$unexpectedQemuExecutables = @(
+    $qemuFiles | Where-Object { $_.Name -like 'qemu-system-*.exe' -and $_.Name -ne 'qemu-system-x86_64.exe' }
+)
+if ($unexpectedQemuExecutables.Count -gt 0) {
+    throw "Unrelated QEMU system emulators are present: $($unexpectedQemuExecutables.Name -join ', ')"
+}
+
+$dependencyReport = Join-Path $runtime "reports\qemu-dependencies.json"
+$dependencyEvidence = $null
+if (Test-Path -LiteralPath $dependencyReport -PathType Leaf) {
+    $dependencyEvidence = Get-Content -LiteralPath $dependencyReport -Raw | ConvertFrom-Json
+    if ($dependencyEvidence.unresolvedNonSystemImports) {
+        $props = @($dependencyEvidence.unresolvedNonSystemImports.PSObject.Properties)
+        if ($props.Count -gt 0) {
+            throw "QEMU dependency report contains unresolved non-system DLL imports."
+        }
+    }
 }
 
 $files = Get-ChildItem -LiteralPath $runtime -Recurse -File
@@ -61,7 +93,11 @@ $report = [ordered]@{
     passed = $true
     runtimeMiB = $totalMiB
     maximumMiB = $MaximumUncompressedMiB
-    verifiedAndroidFiles = $hashResults
+    qemuMiB = $qemuMiB
+    maximumQemuMiB = $MaximumQemuMiB
+    qemuFileCount = $qemuFiles.Count
+    verifiedRuntimeFiles = $hashResults
+    dependencyEvidencePresent = [bool]$dependencyEvidence
     largestFiles = $largest
     measuredAtUtc = [DateTime]::UtcNow.ToString("o")
 }
@@ -70,5 +106,5 @@ $reportFile = Join-Path $repoRoot $ReportPath
 $reportDir = Split-Path -Parent $reportFile
 if ($reportDir) { New-Item $reportDir -ItemType Directory -Force | Out-Null }
 $report | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath $reportFile -Encoding UTF8
-Write-Host "PASS: Jawal runtime verified at $totalMiB MiB."
+Write-Host "PASS: Jawal runtime verified at $totalMiB MiB; QEMU=$qemuMiB MiB."
 Write-Host "Report: $reportFile"
