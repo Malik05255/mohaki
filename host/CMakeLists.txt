@@ -20,9 +20,14 @@ add_executable(Jawal WIN32
     src/VmController.cpp
 )
 
+# JawalPkg is a test/support CLI used by the production pipeline. Besides the
+# guest package/control bridge it exposes offline data-maintenance entry points
+# so backup/restore/compaction exercise the exact same C++ implementation as the
+# Jawal.exe system-menu actions.
 add_executable(JawalPkg
     src/PackageCli.cpp
     src/PackageBridge.cpp
+    src/DeviceMaintenance.cpp
 )
 
 target_include_directories(Jawal PRIVATE src)
