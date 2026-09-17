@@ -51,22 +51,22 @@ def main() -> int:
         ),
         (
             "PRODUCT_PACKAGES += \\\n    otapreopt_script",
-            "# Jawal: otapreopt_script omitted",
+            "# Jawal: OTA dex postinstall utility omitted",
             "remove OTA dex postinstall script",
         ),
         (
             "PRODUCT_PACKAGES_DEBUG += \\\n    bootctl",
-            "# Jawal: bootctl omitted; no A/B slots are exposed",
+            "# Jawal: A/B boot control utility omitted",
             "remove A/B boot control utility",
         ),
         (
             "PRODUCT_PACKAGES += \\\n    update_engine \\\n    update_engine_sideload \\\n    update_verifier",
-            "# Jawal: update_engine/update_verifier omitted; host owns runtime updates",
+            "# Jawal: Android updater packages omitted; Windows host owns runtime updates",
             "remove Android update engine packages",
         ),
         (
             "PRODUCT_PACKAGES_DEBUG += \\\n    update_engine_client",
-            "# Jawal: update_engine_client omitted",
+            "# Jawal: updater debug client omitted",
             "remove update engine debug client",
         ),
         (
