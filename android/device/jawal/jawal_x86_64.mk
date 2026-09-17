@@ -28,6 +28,9 @@ PRODUCT_DEVICE := x86_64
 PRODUCT_BRAND := Jawal
 PRODUCT_MODEL := Jawal Virtual Phone
 PRODUCT_MANUFACTURER := Jawal
+# device/generic/common declares `tablet`; Jawal deliberately overrides that
+# inherited PC/tablet classification after all common product inheritance.
+PRODUCT_CHARACTERISTICS := phone
 
 # Shipping only the primary UX languages avoids a large locale/resource
 # footprint. Framework/font pieces needed for application rendering remain.
