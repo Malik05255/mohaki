@@ -119,6 +119,7 @@ JAWAL_REMOVE_PACKAGES := \
     simpleperf \
     strace \
     heapprofd \
+    bootanimation \
     wpa_supplicant \
     wpa_supplicant.conf \
     wpa_cli \
