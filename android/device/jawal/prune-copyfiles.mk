@@ -16,9 +16,21 @@ $(eval $(call jawal_drop_copy_containing,android.hardware.uwb))
 $(eval $(call jawal_drop_copy_containing,android.hardware.bluetooth))
 $(eval $(call jawal_drop_copy_containing,android.hardware.wifi))
 $(eval $(call jawal_drop_copy_containing,android.hardware.telephony))
+$(eval $(call jawal_drop_copy_containing,android.hardware.location))
+$(eval $(call jawal_drop_copy_containing,android.hardware.sensor.))
+$(eval $(call jawal_drop_copy_containing,android.hardware.fingerprint))
 $(eval $(call jawal_drop_copy_containing,bluetooth_audio_policy_configuration))
 $(eval $(call jawal_drop_copy_containing,android.hardware.usb.host.xml))
 $(eval $(call jawal_drop_copy_containing,android.hardware.usb.accessory.xml))
+
+# Physical-PC discovery/configuration data that has no function in Jawal's fixed
+# QEMU machine. Ethernet/OpenGL/touch/audio declarations are intentionally kept.
+$(eval $(call jawal_drop_copy_containing,external_camera_config.xml))
+$(eval $(call jawal_drop_copy_containing,wpa_supplicant.conf))
+$(eval $(call jawal_drop_copy_containing,wpa_supplicant_overlay.conf))
+$(eval $(call jawal_drop_copy_containing,/ppp/))
+$(eval $(call jawal_drop_copy_containing,pci.ids))
+$(eval $(call jawal_drop_copy_containing,usb.ids))
 
 # Jawal owns the visible boot experience on Windows. Android's stock/custom boot
 # animation archives are redundant once debug.sf.nobootanimation=1 is set.
