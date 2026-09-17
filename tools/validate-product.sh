@@ -3,6 +3,7 @@ set -euo pipefail
 
 PRODUCT_OUT="${1:?usage: validate-product.sh PRODUCT_OUT [REPORT_DIR]}"
 REPORT_DIR="${2:-$(pwd)/dist/validation}"
+SERVICES_VARIANT="${JAWAL_SERVICES_VARIANT:-microg}"
 mkdir -p "$REPORT_DIR"
 REPORT="$REPORT_DIR/validation.txt"
 : > "$REPORT"
@@ -11,6 +12,11 @@ pass() { printf 'PASS  %s\n' "$*" | tee -a "$REPORT"; }
 warn() { printf 'WARN  %s\n' "$*" | tee -a "$REPORT"; }
 fail() { printf 'FAIL  %s\n' "$*" | tee -a "$REPORT"; FAILED=1; }
 FAILED=0
+
+case "$SERVICES_VARIANT" in
+  vanilla|microg) pass "Services variant: $SERVICES_VARIANT" ;;
+  *) fail "Unexpected JAWAL_SERVICES_VARIANT: $SERVICES_VARIANT" ;;
+esac
 
 BANNED_APPS=(
   Aperture BlissUpdater Updater SetupWizard LineageSetupWizard BOSWallpapers
@@ -105,6 +111,16 @@ require_path() {
   if [[ -n "$found" ]]; then pass "$label -> ${found#$PRODUCT_OUT/}"; else fail "$label missing"; fi
 }
 
+path_exists() {
+  local pattern
+  for pattern in "$@"; do
+    if find "$PRODUCT_OUT" -path "$pattern" -print -quit 2>/dev/null | grep -q .; then
+      return 0
+    fi
+  done
+  return 1
+}
+
 # Protected compatibility/quality core. Size optimization may not remove these.
 require_path "ART app_process64" '*/bin/app_process64'
 require_path "SurfaceFlinger" '*/bin/surfaceflinger'
@@ -133,6 +149,27 @@ require_path "ext4 recovery/fsck" '*/bin/e2fsck'
 require_path "Jawal system bridge" '*/JawalSystemBridge*'
 require_path "Jawal Store" '*/JawalStore*'
 require_path "Jawal core hardware profile" '*/etc/permissions/jawal_core_hardware.xml'
+
+# The open build supports either a deliberately clean vanilla image or BlissOS'
+# microG variant. Validate the resulting product, not just the environment flag,
+# so a missing vendor/microg inheritance cannot silently ship a half-configured
+# compatibility image. GsfProxy is useful but legacy, so it is evidence/warning
+# rather than a hard requirement for future upstream microG revisions.
+if [[ "$SERVICES_VARIANT" == "microg" ]]; then
+  require_path "microG Services Core" '*/GmsCore*' '*/MicroG*GmsCore*'
+  require_path "microG FakeStore identity" '*/FakeStore*'
+  if path_exists '*/GsfProxy*'; then
+    pass "microG GSF proxy present"
+  else
+    warn "microG GSF proxy is absent; verify current upstream microG package set"
+  fi
+else
+  if path_exists '*/GmsCore*' '*/MicroG*GmsCore*' '*/FakeStore*'; then
+    fail "microG packages leaked into vanilla services variant"
+  else
+    pass "Vanilla services variant contains no microG packages"
+  fi
+fi
 
 # Stock tablet/handheld profiles claim physical hardware Jawal does not expose.
 for leaked in handheld_core_hardware.xml tablet_core_hardware.xml; do
