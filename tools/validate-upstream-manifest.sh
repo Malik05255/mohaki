@@ -22,7 +22,9 @@ done
 
 mkdir -p "$WORKDIR"
 cd "$WORKDIR"
-repo init -u "$MANIFEST_URL" -b "$MANIFEST_BRANCH" --git-lfs >/dev/null
+# This gate inspects only manifest structure; it deliberately does not sync
+# project objects or require Git LFS. The real Android build enables --git-lfs.
+repo init -u "$MANIFEST_URL" -b "$MANIFEST_BRANCH" >/dev/null
 
 before="$(repo list -p)"
 
