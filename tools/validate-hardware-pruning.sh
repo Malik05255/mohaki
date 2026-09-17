@@ -29,6 +29,11 @@ BANNED_PATTERNS=(
   '*BluetoothMidiService*'
   '*microdroid*'
   '*virtualizationservice*'
+  '*llvmpipe*'
+  '*softpipe*'
+  '*swrast*'
+  '*libvulkan_lvp*'
+  '*vulkan.lvp*'
 )
 
 for pattern in "${BANNED_PATTERNS[@]}"; do
@@ -49,10 +54,12 @@ for required in '*/bin/netd' '*/NetworkStack*' '*/com.android.tethering*'; do
   fi
 done
 
-# Rendering/media quality must remain intact.
+# Rendering/media quality must remain intact. Production Jawal intentionally has
+# no software rasterizer fallback; virgl/virtio acceleration is mandatory.
 for required in \
   '*/bin/surfaceflinger' \
   '*vulkan*' \
+  '*virgl*' \
   '*minigbm*' \
   '*/bin/audioserver' \
   '*media.swcodec*' \
