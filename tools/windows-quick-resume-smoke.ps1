@@ -9,8 +9,10 @@ $jawal = (Resolve-Path $JawalExe).Path
 $root = Split-Path -Parent $jawal
 $runtime = Join-Path $root "runtime"
 $qemuImg = Join-Path $runtime "qemu\qemu-img.exe"
-$dataDisk = Join-Path (Join-Path $env:LOCALAPPDATA "Jawal") "data.qcow2"
-$marker = Join-Path (Join-Path $env:LOCALAPPDATA "Jawal") "quickresume.marker"
+$dataDir = Join-Path $env:LOCALAPPDATA "Jawal"
+$dataDisk = Join-Path $dataDir "data.qcow2"
+$dataMarker = Join-Path $dataDir "data-independent-v1.marker"
+$marker = Join-Path $dataDir "quickresume.marker"
 $repoRoot = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
 $probe = Join-Path $PSScriptRoot "probe-guest.ps1"
 $report = Join-Path $repoRoot $ReportPath
@@ -43,6 +45,23 @@ function Close-Gracefully($process) {
     }
 }
 
+function Assert-StandaloneData {
+    if (-not (Test-Path -LiteralPath $dataDisk -PathType Leaf)) {
+        throw "Jawal data disk is missing."
+    }
+    if (-not (Test-Path -LiteralPath $dataMarker -PathType Leaf)) {
+        throw "Jawal data disk is missing standalone-data marker."
+    }
+    $raw = (& $qemuImg info --output=json $dataDisk) -join "`n"
+    if ($LASTEXITCODE -ne 0) { throw "qemu-img info failed for data.qcow2." }
+    $info = $raw | ConvertFrom-Json
+    if (($info.PSObject.Properties.Name -contains 'backing-filename' -and $info.'backing-filename') -or
+        ($info.PSObject.Properties.Name -contains 'full-backing-filename' -and $info.'full-backing-filename')) {
+        throw "Quick Resume data disk unexpectedly depends on a backing file."
+    }
+    return $info
+}
+
 $first = Start-And-WaitReady -Exe $jawal -Timeout $TimeoutSeconds
 $coldReadyMs = $first.ElapsedMs
 Close-Gracefully $first.Process
@@ -50,9 +69,7 @@ Close-Gracefully $first.Process
 if (-not (Test-Path -LiteralPath $marker -PathType Leaf)) {
     throw "Quick-resume marker was not created after graceful close."
 }
-if (-not (Test-Path -LiteralPath $dataDisk -PathType Leaf)) {
-    throw "Jawal data disk missing after first boot."
-}
+$null = Assert-StandaloneData
 
 $snapshotOutput = & $qemuImg snapshot -l $dataDisk 2>&1 | Out-String
 if ($LASTEXITCODE -ne 0) { throw "qemu-img snapshot listing failed." }
@@ -60,13 +77,42 @@ if ($snapshotOutput -notmatch 'jawal_quick_resume') {
     throw "Quick-resume VM snapshot is not present in data.qcow2."
 }
 
+$markerBeforeResumeUtc = (Get-Item -LiteralPath $marker).LastWriteTimeUtc
 $second = Start-And-WaitReady -Exe $jawal -Timeout $TimeoutSeconds
 $resumeReadyMs = $second.ElapsedMs
-Close-Gracefully $second.Process
+try {
+    # VmController deletes this marker only when -loadvm fails and it retries a
+    # cold boot. Check it while Android is running, before graceful shutdown can
+    # create a fresh marker and accidentally hide a failed resume.
+    if (-not (Test-Path -LiteralPath $marker -PathType Leaf)) {
+        throw "Quick Resume fell back to a cold boot; the resume marker was invalidated during startup."
+    }
+    $markerDuringResumeUtc = (Get-Item -LiteralPath $marker).LastWriteTimeUtc
+    if ($markerDuringResumeUtc -ne $markerBeforeResumeUtc) {
+        throw "Quick-resume marker changed during startup; expected the existing snapshot marker to be consumed without replacement."
+    }
+    $null = Assert-StandaloneData
+}
+finally {
+    Close-Gracefully $second.Process
+}
+
+if (-not (Test-Path -LiteralPath $marker -PathType Leaf)) {
+    throw "Quick-resume marker was not refreshed after the resumed session closed."
+}
+$null = Assert-StandaloneData
+
+$snapshotAfterOutput = & $qemuImg snapshot -l $dataDisk 2>&1 | Out-String
+if ($LASTEXITCODE -ne 0 -or $snapshotAfterOutput -notmatch 'jawal_quick_resume') {
+    throw "Quick-resume snapshot disappeared after the resumed session was saved again."
+}
 
 [ordered]@{
     passed = $true
-    snapshotPresent = $true
+    snapshotPresentBeforeResume = $true
+    resumeUsedWithoutColdFallback = $true
+    snapshotPresentAfterResume = $true
+    dataRemainedStandalone = $true
     markerPresent = (Test-Path -LiteralPath $marker -PathType Leaf)
     coldReadyMs = $coldReadyMs
     resumeReadyMs = $resumeReadyMs
@@ -74,5 +120,5 @@ Close-Gracefully $second.Process
     completedAtUtc = [DateTime]::UtcNow.ToString("o")
 } | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath $report -Encoding UTF8
 
-Write-Host "PASS: quick-resume snapshot saved and restored."
+Write-Host "PASS: quick-resume snapshot loaded without cold fallback and user data remained standalone."
 Write-Host "Cold ready: ${coldReadyMs}ms; resume ready: ${resumeReadyMs}ms"
