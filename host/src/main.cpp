@@ -15,6 +15,7 @@
 
 #include <algorithm>
 #include <filesystem>
+#include <fstream>
 #include <string>
 #include <thread>
 #include <utility>
@@ -93,18 +94,96 @@ bool RunHiddenAndWait(const std::wstring& command, const std::filesystem::path& 
     return exitCode == 0;
 }
 
+bool WriteStandaloneDataMarker(const std::filesystem::path& marker) {
+    std::ofstream output(marker, std::ios::trunc);
+    if (!output) return false;
+    output << "standalone-qcow2-v1\n";
+    return output.good();
+}
+
+bool ConvertQcow2Standalone(const std::filesystem::path& qemuImg,
+                            const std::filesystem::path& source,
+                            const std::filesystem::path& destination,
+                            const std::filesystem::path& runtime) {
+    std::wstring command = L"\"" + qemuImg.wstring() +
+                           L"\" convert -f qcow2 -O qcow2 -S 4k \"" +
+                           source.wstring() + L"\" \"" + destination.wstring() + L"\"";
+    return RunHiddenAndWait(command, runtime);
+}
+
 bool EnsureDataOverlay(const std::filesystem::path& runtime,
                        const std::filesystem::path& dataTemplate,
                        const std::filesystem::path& userData) {
-    if (std::filesystem::exists(userData)) return true;
     std::filesystem::create_directories(userData.parent_path());
 
     const auto qemuImg = runtime / L"qemu" / L"qemu-img.exe";
     if (!std::filesystem::exists(qemuImg) || !std::filesystem::exists(dataTemplate)) return false;
 
-    std::wstring command = L"\"" + qemuImg.wstring() + L"\" create -f qcow2 -F qcow2 -b \"" +
-                           dataTemplate.wstring() + L"\" \"" + userData.wstring() + L"\"";
-    return RunHiddenAndWait(command, runtime);
+    const auto marker = userData.parent_path() / L"data-independent-v1.marker";
+    if (std::filesystem::exists(userData) && std::filesystem::exists(marker)) return true;
+
+    auto temporary = userData;
+    temporary += L".creating";
+    auto previous = userData;
+    previous += L".pre-standalone";
+
+    std::error_code ec;
+    std::filesystem::remove(temporary, ec);
+    ec.clear();
+    std::filesystem::remove(previous, ec);
+
+    if (!std::filesystem::exists(userData)) {
+        // Copy the sparse empty template into a self-contained QCOW2. Do not use
+        // a backing file: runtime upgrades may replace the template while user
+        // data must remain independently valid for months or years.
+        if (!ConvertQcow2Standalone(qemuImg, dataTemplate, temporary, runtime)) {
+            std::filesystem::remove(temporary, ec);
+            return false;
+        }
+        ec.clear();
+        std::filesystem::rename(temporary, userData, ec);
+        if (ec) {
+            std::filesystem::remove(temporary, ec);
+            return false;
+        }
+        return WriteStandaloneDataMarker(marker);
+    }
+
+    // Migration for developer/early Jawal builds that created data.qcow2 as a
+    // backing overlay over runtime/images/jawal-data-template.qcow2. qemu-img
+    // convert resolves the complete chain into an independent image before the
+    // runtime is allowed to boot. The original stays available for rollback
+    // until the standalone image has been atomically installed.
+    if (!ConvertQcow2Standalone(qemuImg, userData, temporary, runtime)) {
+        std::filesystem::remove(temporary, ec);
+        return false;
+    }
+
+    ec.clear();
+    std::filesystem::rename(userData, previous, ec);
+    if (ec) {
+        std::filesystem::remove(temporary, ec);
+        return false;
+    }
+
+    ec.clear();
+    std::filesystem::rename(temporary, userData, ec);
+    if (ec) {
+        std::error_code rollbackError;
+        std::filesystem::rename(previous, userData, rollbackError);
+        std::filesystem::remove(temporary, rollbackError);
+        return false;
+    }
+
+    if (!WriteStandaloneDataMarker(marker)) {
+        std::error_code rollbackError;
+        std::filesystem::remove(userData, rollbackError);
+        std::filesystem::rename(previous, userData, rollbackError);
+        return false;
+    }
+
+    std::filesystem::remove(previous, ec);
+    return true;
 }
 
 bool WhpxReady(std::wstring* reason) {
@@ -189,9 +268,9 @@ void StartRuntime(HWND owner) {
     }
 
     if (!std::filesystem::exists(systemDisk) || !EnsureDataOverlay(runtime, dataTemplate, userData)) {
-        jawal::LogDiagnostic(L"Runtime payload or data overlay is incomplete");
+        jawal::LogDiagnostic(L"Runtime payload or standalone data image is incomplete");
         MessageBoxW(owner,
-                    L"ملفات نظام جوال غير مكتملة. يجب إنشاء حزمة Android الأساسية قبل التشغيل.",
+                    L"ملفات نظام جوال أو مساحة بياناته غير مكتملة. تحقق من Runtime والمساحة الحرة ثم حاول مرة أخرى.",
                     L"جوال", MB_OK | MB_ICONERROR | MB_RTLREADING);
         return;
     }
@@ -251,13 +330,16 @@ bool FactoryReset(HWND owner) {
     const auto root = ModuleDirectory();
     const auto runtime = root / L"runtime";
     const auto dataTemplate = runtime / L"images" / L"jawal-data-template.qcow2";
-    const auto userData = LocalDataDirectory() / L"data.qcow2";
+    const auto dataDirectory = LocalDataDirectory();
+    const auto userData = dataDirectory / L"data.qcow2";
+    const auto standaloneMarker = dataDirectory / L"data-independent-v1.marker";
 
     InvalidateQuickResume();
     std::error_code ec;
     std::filesystem::remove(userData, ec);
+    std::filesystem::remove(standaloneMarker, ec);
     if (ec && std::filesystem::exists(userData)) {
-        jawal::LogDiagnostic(L"Factory reset failed deleting data overlay");
+        jawal::LogDiagnostic(L"Factory reset failed deleting data image");
         MessageBoxW(owner,
                     L"تعذر حذف بيانات الجوال الحالية. أغلق أي برنامج يستخدم ملفات Jawal ثم حاول مرة أخرى.",
                     L"فورمات جوال", MB_OK | MB_ICONERROR | MB_RTLREADING);
@@ -266,7 +348,7 @@ bool FactoryReset(HWND owner) {
     }
 
     if (!EnsureDataOverlay(runtime, dataTemplate, userData)) {
-        jawal::LogDiagnostic(L"Factory reset failed creating clean data overlay");
+        jawal::LogDiagnostic(L"Factory reset failed creating clean standalone data image");
         MessageBoxW(owner,
                     L"تم حذف البيانات لكن تعذر إنشاء مساحة جوال نظيفة جديدة. تحقق من ملفات Runtime والمساحة الحرة.",
                     L"فورمات جوال", MB_OK | MB_ICONERROR | MB_RTLREADING);
