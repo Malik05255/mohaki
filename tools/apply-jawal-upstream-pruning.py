@@ -65,7 +65,6 @@ def main() -> int:
         (board, "BOARD_HAVE_BLUETOOTH := true", "BOARD_HAVE_BLUETOOTH := false", "disable physical Bluetooth board support"),
         (board, "BOARD_HAVE_BLUETOOTH_LINUX := true", "BOARD_HAVE_BLUETOOTH_LINUX := false", "disable Linux Bluetooth vendor support"),
         (board, "BOARD_HAVE_BLUETOOTH_INTEL_ICNV := true", "BOARD_HAVE_BLUETOOTH_INTEL_ICNV := false", "disable Intel physical Bluetooth support"),
-        (board, "BUILD_WITH_ALSA_UTILS ?= true", "BUILD_WITH_ALSA_UTILS ?= false", "omit ALSA command-line utilities while retaining audio HAL"),
         (board, "BOARD_HAS_GPS_HARDWARE ?= true", "BOARD_HAS_GPS_HARDWARE ?= false", "disable physical GPS board support"),
         (
             board,
