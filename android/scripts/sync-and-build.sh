@@ -9,6 +9,7 @@ MANIFEST_BRANCH="${JAWAL_ANDROID_BRANCH:-voyager-x86-qpr2}"
 BUILD_VARIANT="${JAWAL_SERVICES_VARIANT:-microg}"
 BUILD_TYPE="${JAWAL_BUILD_TYPE:-user}"
 NATIVE_BRIDGE="${JAWAL_NATIVE_BRIDGE:-none}"
+STORE_VERSION="${AURORA_VERSION:-4.8.4}"
 LUNCH_TARGET="jawal_x86_64-ap4a-${BUILD_TYPE}"
 
 case "$BUILD_VARIANT" in
@@ -110,6 +111,21 @@ for path in "${pruned_source_paths[@]}"; do
   fi
 done
 
+# Fail before Soong starts if the requested service flavor was not actually
+# delivered by the synced Bliss manifest. A missing microG product inheritance
+# should not consume hours of CPU only to fail or silently produce vanilla.
+if [[ "$BUILD_VARIANT" == "microg" ]]; then
+  if [[ ! -f vendor/microg/products/gms.mk ]]; then
+    echo "microG build requested but vendor/microg/products/gms.mk is missing after repo sync." >&2
+    echo "Verify the voyager-x86-qpr2 manifest includes the Bliss microG vendor project." >&2
+    exit 8
+  fi
+  if ! grep -Eq 'GmsCore|FakeStore|microg|MicroG' vendor/microg/products/gms.mk; then
+    echo "microG product file exists but does not expose the expected microG package/product references." >&2
+    exit 8
+  fi
+fi
+
 rm -rf device/jawal vendor/jawal
 mkdir -p device/jawal vendor/jawal
 rsync -a --delete "$ROOT/android/device/jawal/" device/jawal/
@@ -124,9 +140,11 @@ python3 "$ROOT/tools/apply-jawal-upstream-pruning.py" "$AOSP_DIR"
 python3 "$ROOT/tools/apply-jawal-product-pruning.py" "$AOSP_DIR"
 
 export AOSP_DIR
+export AURORA_VERSION="$STORE_VERSION"
 "$ROOT/tools/fetch-store.sh" "$AOSP_DIR/vendor/jawal/store/AuroraStore.apk"
 
 export BLISS_BUILD_VARIANT="$BUILD_VARIANT"
+export JAWAL_SERVICES_VARIANT="$BUILD_VARIANT"
 
 unset USE_LIBNDK_TRANSLATION_NB
 if [[ "$NATIVE_BRIDGE" == "libndk" ]]; then
@@ -176,6 +194,9 @@ python3 "$ROOT/tools/analyze-jawalos-size.py" \
 {
   printf 'android_branch=%s\n' "$MANIFEST_BRANCH"
   printf 'services_variant=%s\n' "$BUILD_VARIANT"
+  printf 'store_name=%s\n' 'Aurora Store'
+  printf 'store_version=%s\n' "$STORE_VERSION"
+  printf 'store_signature_verification=%s\n' 'sha256-publisher-certificate'
   printf 'build_type=%s\n' "$BUILD_TYPE"
   printf 'native_bridge=%s\n' "$NATIVE_BRIDGE"
   printf 'lunch_target=%s\n' "$LUNCH_TARGET"
@@ -183,6 +204,7 @@ python3 "$ROOT/tools/analyze-jawalos-size.py" \
   printf 'physical_firmware_projects=%s\n' 'excluded-before-sync'
   printf 'intel_physical_media_projects=%s\n' 'excluded-before-sync'
   printf 'android_ota_recovery=%s\n' 'disabled-at-source'
+  printf 'user_data_model=%s\n' 'standalone-qcow2-v1'
   printf 'repo_sync_attempts=%s\n' "$sync_attempt"
   printf 'repo_sync_final_jobs=%s\n' "$sync_jobs"
 } > "$OUT_DIR/build-metadata.txt"
