@@ -23,6 +23,7 @@ $dataDir = Join-Path $env:LOCALAPPDATA "Jawal"
 $dataDisk = Join-Path $dataDir "data.qcow2"
 $standaloneMarker = Join-Path $dataDir "data-independent-v1.marker"
 $quickResumeMarker = Join-Path $dataDir "quickresume.marker"
+$sessionTokenPath = Join-Path $dataDir "session.token"
 $repoRoot = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
 $probe = Join-Path $PSScriptRoot "probe-guest.ps1"
 $report = Join-Path $repoRoot $ReportPath
@@ -45,6 +46,8 @@ function Clear-TestDataState {
         $dataDisk,
         $standaloneMarker,
         $quickResumeMarker,
+        $sessionTokenPath,
+        "$sessionTokenPath.tmp",
         "$dataDisk.creating",
         "$dataDisk.pre-standalone",
         (Join-Path $dataDir "data.previous.qcow2"),
@@ -90,6 +93,15 @@ function Assert-StandaloneData {
     & $qemuImg check $dataDisk | Out-Host
     if ($LASTEXITCODE -ne 0) { throw "qemu-img check failed for standalone user data." }
     return $info
+}
+
+function Read-LiveSessionToken {
+    if (-not (Test-Path -LiteralPath $sessionTokenPath -PathType Leaf)) {
+        throw "Jawal live session token is missing."
+    }
+    $token = (Get-Content -LiteralPath $sessionTokenPath -Raw).Trim()
+    if ($token -notmatch '^[0-9a-f]{64}$') { throw "Jawal live session token is malformed." }
+    return $token
 }
 
 # Stage 9 must not inherit whatever data Stage 8 happened to leave on a reused
@@ -162,13 +174,62 @@ for ($i = 1; $i -le $Cycles; $i++) {
     $null = Assert-StandaloneData
 }
 
+# Finally simulate the host itself being killed by Task Manager. QEMU must be a
+# member of Jawal's KILL_ON_JOB_CLOSE Windows Job Object and therefore may not
+# survive as an orphan VM. A subsequent cold launch must rotate the session token
+# and preserve the installed app/data despite the forced host/QEMU termination.
+Clear-QuickResume
+$hostCrash = Start-Process -FilePath $jawal -PassThru
+$hostCrashHealth = & $probe -TimeoutSeconds $TimeoutSeconds -RequirePhoneFeatures
+if (-not $hostCrashHealth.smokeInstalled) { throw "Installed app missing before host-crash containment test." }
+$preCrashSession = Read-LiveSessionToken
+$qemuHostCrash = Get-Process qemu-system-x86_64 -ErrorAction Stop | Select-Object -First 1
+$hostCrashQemuPid = $qemuHostCrash.Id
+Stop-Process -Id $hostCrash.Id -Force
+$hostCrash.WaitForExit(10000) | Out-Null
+
+$qemuExitedWithHost = $false
+$deadline = [DateTime]::UtcNow.AddSeconds(10)
+while ([DateTime]::UtcNow -lt $deadline) {
+    $survivor = Get-Process -Id $hostCrashQemuPid -ErrorAction SilentlyContinue
+    if (-not $survivor) { $qemuExitedWithHost = $true; break }
+    Start-Sleep -Milliseconds 250
+}
+if (-not $qemuExitedWithHost) {
+    Stop-Process -Id $hostCrashQemuPid -Force -ErrorAction SilentlyContinue
+    throw "QEMU survived forced Jawal.exe termination; KILL_ON_JOB_CLOSE containment failed."
+}
+
+$null = Assert-StandaloneData
+
+$afterHostCrash = Start-Process -FilePath $jawal -PassThru
+try {
+    $afterHostCrashHealth = & $probe -TimeoutSeconds $TimeoutSeconds -RequirePhoneFeatures
+    if (-not $afterHostCrashHealth.smokeInstalled) {
+        throw "Installed app state was lost after forced Jawal.exe/QEMU termination."
+    }
+    $postCrashSession = Read-LiveSessionToken
+    if ($postCrashSession -eq $preCrashSession) {
+        throw "Cold restart after host crash reused the previous authenticated session token."
+    }
+}
+finally {
+    Stop-JawalGracefully $afterHostCrash
+    Clear-QuickResume
+}
+$null = Assert-StandaloneData
+
 [ordered]@{
     passed = $true
     cycles = $Cycles
     automaticWatchdogRecovery = $true
+    hostCrashKillsQemu = $qemuExitedWithHost
+    hostCrashQemuPid = $hostCrashQemuPid
+    sessionRotatedAfterHostCrash = ($postCrashSession -ne $preCrashSession)
+    appPreservedAfterHostCrash = [bool]$afterHostCrashHealth.smokeInstalled
     dataRemainedStandalone = $true
     results = $cyclesOut
     completedAtUtc = [DateTime]::UtcNow.ToString("o")
 } | ConvertTo-Json -Depth 10 | Set-Content -LiteralPath $report -Encoding UTF8
 
-Write-Host "PASS: $Cycles hard-QEMU-crash cycles auto-recovered and preserved standalone user data."
+Write-Host "PASS: QEMU crash recovery and Jawal host-crash containment preserved standalone user data."
