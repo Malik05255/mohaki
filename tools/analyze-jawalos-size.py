@@ -10,6 +10,7 @@ CATEGORIES = {
     "graphics": ("egl", "gles", "vulkan", "mesa", "virgl", "minigbm", "drm"),
     "framework": ("framework.jar", "/framework/", "services.jar", "boot-"),
     "apps": ("/app/", "/priv-app/"),
+    "kernel_modules": ("/lib/modules/", ".ko", ".ko.zst", ".ko.xz"),
     "native_libs": ("/lib64/", "/lib/"),
     "firmware": ("/firmware/", "/vendor/firmware/"),
 }
@@ -36,6 +37,8 @@ SAFE_HINT_TOKENS = (
     "gnss-service.ranchu", "sensors@2.1-impl.ranchu", "wpa_supplicant",
     "hostapd", "bt_vhci", "mac80211", "bluetooth-service.default",
     "bootanimation", "bugreport", "dumpstate", "perfetto", "incidentd",
+    "ihd_drv_video", "i965_drv_video", "gmmlib", "media-driver",
+    "intel-media", "libva-utils", "/vaapi/", "libmix", "wrs_omx",
 )
 
 REVIEW_HINT_TOKENS = (
