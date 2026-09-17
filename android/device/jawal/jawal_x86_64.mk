@@ -32,6 +32,13 @@ PRODUCT_MANUFACTURER := Jawal
 # inherited PC/tablet classification after all common product inheritance.
 PRODUCT_CHARACTERISTICS := phone
 
+# The upstream PC product prefers mdpi/hdpi resources. Jawal boots at 420 dpi,
+# close to Android's xxhdpi bucket, so retain phone-quality density assets and
+# prefer xxhdpi instead of upscaling low-density system artwork. Default/vector
+# resources remain available through normal AAPT fallback behavior.
+PRODUCT_AAPT_CONFIG := normal large xlarge mdpi hdpi xhdpi xxhdpi
+PRODUCT_AAPT_PREF_CONFIG := xxhdpi
+
 # Shipping only the primary UX languages avoids a large locale/resource
 # footprint. Framework/font pieces needed for application rendering remain.
 PRODUCT_LOCALES := ar_SA en_US
