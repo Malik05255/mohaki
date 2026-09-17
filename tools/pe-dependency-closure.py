@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
-"""Compute the local PE DLL dependency closure for Jawal's QEMU runtime.
+"""Compute the local PE DLL dependency closure for Jawal's Windows runtime.
 
-This intentionally has no third-party Python dependencies. It reads the PE import
-and delay-import tables, resolves only DLLs present in the supplied runtime
-directory, and treats Windows system DLLs as external dependencies.
+The scanner has no third-party Python dependencies. It reads PE import and
+DelayLoad tables, recursively follows DLLs present beside the supplied binaries,
+and can distinguish real Windows system DLLs from missing redistributable/runtime
+DLLs. In strict mode, an unresolved non-system dependency is a packaging error.
 """
 from __future__ import annotations
 
@@ -50,7 +51,6 @@ class PE:
         else:
             raise ValueError(f"unsupported PE optional header: {path}")
 
-        # Import directory index 1; delay-import directory index 13.
         self.import_rva = u32(self.data, data_dir + 8)
         self.import_size = u32(self.data, data_dir + 12)
         self.delay_rva = u32(self.data, data_dir + 13 * 8)
@@ -72,7 +72,6 @@ class PE:
         for va, span, raw, _ in self.sections:
             if va <= rva < va + span:
                 return raw + (rva - va)
-        # Header RVA fallback.
         if rva < len(self.data):
             return rva
         raise ValueError(f"RVA 0x{rva:x} outside sections in {self.path}")
@@ -81,7 +80,6 @@ class PE:
         names: set[str] = set()
         if self.import_rva:
             off = self.rva_to_offset(self.import_rva)
-            # IMAGE_IMPORT_DESCRIPTOR: 20 bytes, Name RVA at +12.
             limit = off + (self.import_size or 1 << 20)
             while off + 20 <= len(self.data) and off < limit:
                 fields = struct.unpack_from("<IIIII", self.data, off)
@@ -95,20 +93,19 @@ class PE:
         if self.delay_rva:
             off = self.rva_to_offset(self.delay_rva)
             limit = off + (self.delay_size or 1 << 20)
-            # IMAGE_DELAYLOAD_DESCRIPTOR: 32 bytes; DLLNameRVA at +4.
             while off + 32 <= len(self.data) and off < limit:
                 fields = struct.unpack_from("<IIIIIIII", self.data, off)
                 if not any(fields):
                     break
                 attrs, name_field = fields[0], fields[1]
-                if name_field:
-                    # Modern images use RVA when dlattrRva bit is set. For old
-                    # VA-style descriptors, translating reliably needs image base;
-                    # QEMU Windows builds in scope use RVA-style delay imports.
-                    if attrs & 1:
-                        names.add(read_cstr(self.data, self.rva_to_offset(name_field)).lower())
+                if name_field and attrs & 1:
+                    names.add(read_cstr(self.data, self.rva_to_offset(name_field)).lower())
                 off += 32
         return {n for n in names if n.endswith(".dll")}
+
+
+def is_api_set(name: str) -> bool:
+    return name.startswith("api-ms-win-") or name.startswith("ext-ms-win-")
 
 
 def main() -> int:
@@ -116,6 +113,9 @@ def main() -> int:
     ap.add_argument("runtime_dir", type=Path)
     ap.add_argument("roots", nargs="+")
     ap.add_argument("--json", dest="json_path", type=Path)
+    ap.add_argument("--system-dir", dest="system_dirs", action="append", default=[])
+    ap.add_argument("--strict-local", action="store_true",
+                    help="fail if an imported DLL is neither local nor present in a system directory")
     args = ap.parse_args()
 
     root = args.runtime_dir.resolve()
@@ -125,13 +125,18 @@ def main() -> int:
         if not p.is_file():
             raise SystemExit(f"root PE missing: {p}")
 
+    system_names: set[str] = set()
+    for raw in args.system_dirs:
+        system_dir = Path(raw)
+        if system_dir.is_dir():
+            system_names.update(p.name.lower() for p in system_dir.glob("*.dll"))
+
     queue = roots[:]
     visited: set[Path] = set()
     required: dict[str, Path] = {}
+    system_imports: dict[str, list[str]] = {}
     unresolved: dict[str, list[str]] = {}
 
-    # DLLs not present beside QEMU are expected to be Windows/system runtime
-    # dependencies. Record them for evidence, but do not copy or fail on them.
     while queue:
         current = queue.pop(0).resolve()
         if current in visited:
@@ -141,6 +146,8 @@ def main() -> int:
             imports = PE(current).imports()
         except Exception as exc:
             raise SystemExit(f"failed to parse {current.name}: {exc}")
+
+        os_here: list[str] = []
         missing_here: list[str] = []
         for name in sorted(imports):
             dep = local.get(name)
@@ -148,8 +155,12 @@ def main() -> int:
                 if name not in required:
                     required[name] = dep
                     queue.append(dep)
+            elif name in system_names or is_api_set(name):
+                os_here.append(name)
             else:
                 missing_here.append(name)
+        if os_here:
+            system_imports[current.name] = os_here
         if missing_here:
             unresolved[current.name] = missing_here
 
@@ -157,14 +168,22 @@ def main() -> int:
     for p in ordered:
         print(p.name)
 
+    result = {
+        "roots": [p.name for p in roots],
+        "localDllCount": len(ordered),
+        "localDlls": [p.name for p in ordered],
+        "systemImports": system_imports,
+        "unresolvedNonSystemImports": unresolved,
+        "strictLocal": args.strict_local,
+    }
     if args.json_path:
         args.json_path.parent.mkdir(parents=True, exist_ok=True)
-        args.json_path.write_text(json.dumps({
-            "roots": [p.name for p in roots],
-            "localDllCount": len(ordered),
-            "localDlls": [p.name for p in ordered],
-            "externalImports": unresolved,
-        }, indent=2), encoding="utf-8")
+        args.json_path.write_text(json.dumps(result, indent=2), encoding="utf-8")
+
+    if args.strict_local and unresolved:
+        for owner, names in unresolved.items():
+            print(f"unresolved non-system imports for {owner}: {', '.join(names)}", file=__import__('sys').stderr)
+        return 2
     return 0
 
 
