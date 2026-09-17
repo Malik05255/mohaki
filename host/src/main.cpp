@@ -362,10 +362,20 @@ bool FactoryReset(HWND owner) {
     creatingData += L".creating";
     auto previousData = userData;
     previousData += L".pre-standalone";
+    const auto atomicPrevious = dataDirectory / L"data.previous.qcow2";
+    const auto restoreTemporary = dataDirectory / L"data.restore.tmp.qcow2";
+    const auto compactTemporary = dataDirectory / L"data.compact.tmp.qcow2";
 
     InvalidateQuickResume();
     bool removalFailed = false;
-    for (const auto& artifact : {userData, standaloneMarker, creatingData, previousData}) {
+    for (const auto& artifact : {
+             userData,
+             standaloneMarker,
+             creatingData,
+             previousData,
+             atomicPrevious,
+             restoreTemporary,
+             compactTemporary}) {
         std::error_code removeError;
         std::filesystem::remove(artifact, removeError);
         if (removeError && std::filesystem::exists(artifact)) removalFailed = true;
@@ -519,8 +529,14 @@ void OpenLogs(HWND owner) {
 }
 
 void RecoverRuntime(HWND owner) {
-    if (!gVm.Running()) return;
-    jawal::LogDiagnostic(L"Automatic runtime recovery started");
+    const bool processWasRunning = gVm.Running();
+    jawal::LogDiagnostic(processWasRunning
+        ? L"Automatic runtime recovery started after guest health failure"
+        : L"Automatic runtime recovery started after QEMU process exit");
+
+    // Always clear the controller/process handle and start cold. The previous
+    // guard returned when QEMU had actually exited, which prevented recovery in
+    // the most important crash case.
     StopRuntime(false);
     InvalidateQuickResume();
     StartRuntime(owner);
