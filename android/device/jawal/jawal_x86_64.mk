@@ -41,7 +41,8 @@ PRODUCT_COMPRESSED_APEX := true
 
 PRODUCT_SYSTEM_PROPERTIES += \
     ro.jawal.runtime=true \
-    ro.jawal.form_factor=virtual_phone
+    ro.jawal.form_factor=virtual_phone \
+    debug.sf.nobootanimation=1
 
 # System integration + the only bundled consumer-facing app.
 # Launcher/SystemUI/Settings remain because they are part of the operating
