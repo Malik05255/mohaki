@@ -46,6 +46,7 @@ private:
     bool QmpHumanMonitor(const std::string& command, std::string* reply = nullptr) const;
 
     PROCESS_INFORMATION process_{};
+    HANDLE job_{nullptr};
     RenderBridge renderBridge_{};
     std::filesystem::path runtimeDir_{};
     std::filesystem::path sessionTokenFile_{};
