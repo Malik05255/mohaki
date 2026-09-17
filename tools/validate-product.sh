@@ -3,7 +3,7 @@ set -euo pipefail
 
 PRODUCT_OUT="${1:?usage: validate-product.sh PRODUCT_OUT [REPORT_DIR]}"
 REPORT_DIR="${2:-$(pwd)/dist/validation}"
-SERVICES_VARIANT="${JAWAL_SERVICES_VARIANT:-microg}"
+SERVICES_VARIANT="${JAWAL_SERVICES_VARIANT:-vanilla}"
 mkdir -p "$REPORT_DIR"
 REPORT="$REPORT_DIR/validation.txt"
 : > "$REPORT"
@@ -150,18 +150,17 @@ require_path "Jawal system bridge" '*/JawalSystemBridge*'
 require_path "Jawal Store" '*/JawalStore*'
 require_path "Jawal core hardware profile" '*/etc/permissions/jawal_core_hardware.xml'
 
-# The open build supports either a deliberately clean vanilla image or BlissOS'
-# microG variant. Validate the resulting product, not just the environment flag,
-# so a missing vendor/microg inheritance cannot silently ship a half-configured
-# compatibility image. GsfProxy is useful but legacy, so it is evidence/warning
-# rather than a hard requirement for future upstream microG revisions.
+# The open build defaults to vanilla because voyager-x86-qpr2 currently does
+# not resolve a vendor/microg project. microG remains a supported opt-in only
+# when the builder supplies a compatible vendor tree explicitly. Validate the
+# resulting image so neither flavor can silently turn into the other.
 if [[ "$SERVICES_VARIANT" == "microg" ]]; then
   require_path "microG Services Core" '*/GmsCore*' '*/MicroG*GmsCore*'
   require_path "microG FakeStore identity" '*/FakeStore*'
   if path_exists '*/GsfProxy*'; then
     pass "microG GSF proxy present"
   else
-    warn "microG GSF proxy is absent; verify current upstream microG package set"
+    warn "microG GSF proxy is absent; verify supplied microG package set"
   fi
 else
   if path_exists '*/GmsCore*' '*/MicroG*GmsCore*' '*/FakeStore*'; then
