@@ -84,6 +84,42 @@ jobs:
           python3 -m py_compile tools/enforce-pruning-budget.py
           python3 -m py_compile tools/pe-dependency-closure.py
           python3 -m py_compile tools/apply-jawal-upstream-pruning.py
+          python3 -m py_compile tools/apply-jawal-product-pruning.py
+
+      - name: Exercise OTA and recovery source pruning
+        run: |
+          root=build/product-pruning-fixture
+          mkdir -p "$root/device/generic/common"
+          cat > "$root/device/generic/common/device.mk" <<'MAKEFILE'
+          PRODUCT_BUILD_GENERIC_OTA_PACKAGE := true
+          AB_OTA_POSTINSTALL_CONFIG += \
+              RUN_POSTINSTALL_system=true \
+              POSTINSTALL_PATH_system=system/bin/otapreopt_script \
+              FILESYSTEM_TYPE_system=ext4 \
+              POSTINSTALL_OPTIONAL_system=true
+          PRODUCT_PACKAGES += \
+              otapreopt_script
+          PRODUCT_PACKAGES_DEBUG += \
+              bootctl
+          PRODUCT_PACKAGES += \
+              update_engine \
+              update_engine_sideload \
+              update_verifier
+          PRODUCT_PACKAGES_DEBUG += \
+              update_engine_client
+          # Recovery
+          PRODUCT_COPY_FILES += \
+              $(if $(wildcard $(PRODUCT_DIR)init.recovery.$(TARGET_PRODUCT).rc),$(PRODUCT_DIR)init.recovery.$(TARGET_PRODUCT).rc,$(LOCAL_PATH)/init.recovery.x86.rc):$(TARGET_COPY_OUT_RECOVERY)/root/init.recovery.$(TARGET_PRODUCT).rc \
+              $(if $(wildcard $(PRODUCT_DIR)init.recovery.sh),$(PRODUCT_DIR),$(LOCAL_PATH)/)init.recovery.sh:$(TARGET_COPY_OUT_RECOVERY)/root/system/etc/init.recovery.sh \
+              $(if $(wildcard $(PRODUCT_DIR)init.fstab.sh),$(PRODUCT_DIR),$(LOCAL_PATH)/)init.fstab.sh:$(TARGET_COPY_OUT_RECOVERY)/root/system/etc/init.fstab.sh \
+          MAKEFILE
+          python3 tools/apply-jawal-product-pruning.py "$root"
+          grep -q '^PRODUCT_BUILD_GENERIC_OTA_PACKAGE := false$' "$root/device/generic/common/device.mk"
+          if grep -Eq 'update_engine|otapreopt_script|TARGET_COPY_OUT_RECOVERY|bootctl' "$root/device/generic/common/device.mk"; then
+            echo "OTA/recovery source pruning left dead machinery in the fixture." >&2
+            cat "$root/device/generic/common/device.mk"
+            exit 1
+          fi
 
       - name: Exercise measured pruning budget gate
         run: |
@@ -126,7 +162,7 @@ jobs:
           CONFIG_VIRTIO=y
           CONFIG_VIRTIO_PCI=y
           CONFIG_VIRTIO_NET=m
-          CONFIG_VIRTIO_BLK=m
+          CONFIG_VIRTIO_BLK=y
           CONFIG_DRM_VIRTIO_GPU=m
           CONFIG_HW_RANDOM_VIRTIO=m
           CONFIG_USB_XHCI_HCD=y
