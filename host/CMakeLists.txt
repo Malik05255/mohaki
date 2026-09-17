@@ -10,6 +10,7 @@ add_executable(Jawal WIN32
     src/ClipboardBridge.cpp
     src/DeviceMaintenance.cpp
     src/Diagnostics.cpp
+    src/GuestReadiness.cpp
     src/PackageBridge.cpp
     src/RenderBridge.cpp
     src/RuntimeIntegrity.cpp
