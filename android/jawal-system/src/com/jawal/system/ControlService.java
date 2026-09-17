@@ -7,6 +7,7 @@ import android.content.ClipboardManager;
 import android.content.Intent;
 import android.content.pm.PackageManager;
 import android.os.IBinder;
+import android.os.SystemProperties;
 import android.util.Base64;
 import android.util.Log;
 
@@ -21,6 +22,7 @@ import java.net.InetAddress;
 import java.net.ServerSocket;
 import java.net.Socket;
 import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
 import java.util.List;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -32,6 +34,7 @@ public final class ControlService extends Service {
     private static final int ARM64_RESULT_PORT = 27187;
     private static final int ARM64_MAGIC = 0x4A415236; // JAR6
     private static final int MAX_CLIPBOARD_BYTES = 64 * 1024;
+    private static final int SESSION_TOKEN_CHARS = 64;
 
     private final ExecutorService executor = Executors.newFixedThreadPool(2);
     private final AtomicInteger arm64Result = new AtomicInteger(0);
@@ -43,6 +46,33 @@ public final class ControlService extends Service {
         super.onCreate();
         executor.execute(this::serveHostControl);
         executor.execute(this::serveArm64Results);
+    }
+
+    private static boolean validSessionToken(String value) {
+        if (value == null || value.length() != SESSION_TOKEN_CHARS) return false;
+        for (int i = 0; i < value.length(); ++i) {
+            if (Character.digit(value.charAt(i), 16) < 0) return false;
+        }
+        return true;
+    }
+
+    private boolean sessionAuthorized(String candidate) {
+        final String expected = SystemProperties.get("ro.boot.jawal_session", "");
+        if (!validSessionToken(expected) || !validSessionToken(candidate)) return false;
+        return MessageDigest.isEqual(
+                expected.getBytes(StandardCharsets.US_ASCII),
+                candidate.getBytes(StandardCharsets.US_ASCII));
+    }
+
+    private String authorizeCommand(String request) {
+        if (request == null || !request.startsWith("AUTH ")) return null;
+        final int tokenStart = "AUTH ".length();
+        final int tokenEnd = request.indexOf(' ', tokenStart);
+        if (tokenEnd <= tokenStart) return null;
+        final String token = request.substring(tokenStart, tokenEnd);
+        if (!sessionAuthorized(token)) return null;
+        final String command = request.substring(tokenEnd + 1).trim();
+        return command.isEmpty() ? null : command;
     }
 
     private void serveHostControl() {
@@ -61,8 +91,13 @@ public final class ControlService extends Service {
                     BufferedWriter writer = new BufferedWriter(
                             new OutputStreamWriter(client.getOutputStream(), StandardCharsets.UTF_8));
 
-                    String command = reader.readLine();
-                    writer.write(handleCommand(command == null ? "" : command.trim()));
+                    final String command = authorizeCommand(reader.readLine());
+                    if (command == null) {
+                        Log.w(TAG, "Rejected unauthenticated control request");
+                        writer.write("ERR AUTH");
+                    } else {
+                        writer.write(handleCommand(command));
+                    }
                     writer.newLine();
                     writer.flush();
                 } catch (Exception error) {
@@ -176,6 +211,8 @@ public final class ControlService extends Service {
     }
 
     private void serveArm64Results() {
+        // This port exists only inside the guest loopback namespace and is not
+        // forwarded to Windows. It is intentionally separate from host control.
         try (ServerSocket server = new ServerSocket(ARM64_RESULT_PORT, 2, InetAddress.getByName("127.0.0.1"))) {
             arm64Server = server;
             while (!Thread.currentThread().isInterrupted()) {
