@@ -4,8 +4,11 @@
 
 #include <winsock2.h>
 #include <ws2tcpip.h>
+#include <bcrypt.h>
 
+#include <array>
 #include <chrono>
+#include <cctype>
 #include <fstream>
 #include <sstream>
 #include <thread>
@@ -13,6 +16,9 @@
 
 namespace jawal {
 namespace {
+
+constexpr std::size_t kSessionTokenBytes = 32;
+constexpr std::size_t kSessionTokenChars = kSessionTokenBytes * 2;
 
 struct WindowSearch {
     DWORD pid{};
@@ -65,8 +71,67 @@ std::string EscapeJson(const std::string& value) {
     return out;
 }
 
+bool ValidSessionToken(const std::string& token) {
+    if (token.size() != kSessionTokenChars) return false;
+    for (const unsigned char c : token) {
+        if (!std::isxdigit(c)) return false;
+    }
+    return true;
+}
+
+bool GenerateSessionToken(std::string* token) {
+    if (!token) return false;
+    std::array<unsigned char, kSessionTokenBytes> random{};
+    if (BCryptGenRandom(nullptr, random.data(), static_cast<ULONG>(random.size()),
+                        BCRYPT_USE_SYSTEM_PREFERRED_RNG) != 0) {
+        return false;
+    }
+
+    static constexpr char hex[] = "0123456789abcdef";
+    token->clear();
+    token->reserve(kSessionTokenChars);
+    for (const unsigned char value : random) {
+        token->push_back(hex[(value >> 4) & 0x0F]);
+        token->push_back(hex[value & 0x0F]);
+    }
+    return true;
+}
+
+bool WriteSessionTokenFile(const std::filesystem::path& path, const std::string& token) {
+    if (path.empty() || !ValidSessionToken(token)) return false;
+
+    std::error_code ec;
+    std::filesystem::create_directories(path.parent_path(), ec);
+    if (ec) return false;
+
+    auto temporary = path;
+    temporary += L".tmp";
+    std::filesystem::remove(temporary, ec);
+    ec.clear();
+
+    {
+        std::ofstream output(temporary, std::ios::trunc);
+        if (!output) return false;
+        output << token << "\n";
+        if (!output.good()) {
+            output.close();
+            std::filesystem::remove(temporary, ec);
+            return false;
+        }
+    }
+
+    if (!MoveFileExW(temporary.c_str(), path.c_str(),
+                     MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH)) {
+        std::filesystem::remove(temporary, ec);
+        return false;
+    }
+    return true;
+}
+
 bool QuickResumeMatchesRuntime(const std::filesystem::path& marker,
-                               const std::filesystem::path& runtimeDir) {
+                               const std::filesystem::path& runtimeDir,
+                               std::string* sessionToken) {
+    if (sessionToken) sessionToken->clear();
     if (marker.empty() || !std::filesystem::exists(marker)) return false;
 
     std::string fingerprint;
@@ -77,8 +142,19 @@ bool QuickResumeMatchesRuntime(const std::filesystem::path& marker,
 
     std::string version;
     std::string runtimeLine;
-    if (!std::getline(input, version) || !std::getline(input, runtimeLine)) return false;
-    return version == "jawal_quick_resume_v2" && runtimeLine == "runtime=" + fingerprint;
+    std::string sessionLine;
+    if (!std::getline(input, version) ||
+        !std::getline(input, runtimeLine) ||
+        !std::getline(input, sessionLine)) {
+        return false;
+    }
+    if (version != "jawal_quick_resume_v3" || runtimeLine != "runtime=" + fingerprint) return false;
+    static constexpr char prefix[] = "session=";
+    if (sessionLine.rfind(prefix, 0) != 0) return false;
+    const std::string token = sessionLine.substr(sizeof(prefix) - 1);
+    if (!ValidSessionToken(token)) return false;
+    if (sessionToken) *sessionToken = token;
+    return true;
 }
 
 } // namespace
@@ -96,6 +172,7 @@ std::wstring VmController::BuildCommandLine(HWND, const VmConfig& c) const {
     const auto firmware = c.runtimeDir / L"firmware" / L"edk2-x86_64-code.fd";
     const auto kernel = c.runtimeDir / L"android" / L"kernel";
     const auto initrd = c.runtimeDir / L"android" / L"initrd.img";
+    const std::wstring sessionToken(sessionToken_.begin(), sessionToken_.end());
 
     std::wostringstream video;
     video << L"video=Virtual-1:" << c.displayWidth << L"x" << c.displayHeight << L"@" << c.refreshRate;
@@ -116,7 +193,8 @@ std::wstring VmController::BuildCommandLine(HWND, const VmConfig& c) const {
     cmd << L" -kernel " << Quote(kernel)
         << L" -initrd " << Quote(initrd)
         << L" -append \"root=/dev/ram0 SRC=/AndroidOS DATA=/dev/vdb HWC=drm_minigbm GRALLOC=minigbm_arcvm FFMPEG_CODEC2_PREFER=1 DPI="
-        << c.displayDensityDpi << L" "
+        << c.displayDensityDpi
+        << L" androidboot.jawal_session=" << sessionToken << L" "
         << video.str() << L" quiet\""
         << L" -device virtio-vga-gl"
         << L" -display sdl,gl=on,window-close=off"
@@ -203,11 +281,27 @@ bool VmController::Start(HWND renderParent, const VmConfig& config, std::wstring
     if (Running()) return true;
 
     VmConfig effective = config;
+    std::string resumeSessionToken;
     if (effective.resumeQuickState &&
-        !QuickResumeMatchesRuntime(effective.quickResumeMarker, effective.runtimeDir)) {
+        !QuickResumeMatchesRuntime(effective.quickResumeMarker, effective.runtimeDir, &resumeSessionToken)) {
         std::error_code ec;
         if (!effective.quickResumeMarker.empty()) std::filesystem::remove(effective.quickResumeMarker, ec);
         effective.resumeQuickState = false;
+    }
+
+    if (effective.resumeQuickState) {
+        sessionToken_ = std::move(resumeSessionToken);
+    } else if (!GenerateSessionToken(&sessionToken_)) {
+        if (error) *error = L"تعذر إنشاء مفتاح جلسة آمن لجوال.";
+        return false;
+    }
+
+    sessionTokenFile_ = effective.dataDisk.parent_path() / L"session.token";
+    if (!WriteSessionTokenFile(sessionTokenFile_, sessionToken_)) {
+        sessionToken_.clear();
+        sessionTokenFile_.clear();
+        if (error) *error = L"تعذر تجهيز مفتاح جلسة جوال المحلي.";
+        return false;
     }
 
     const auto kernel = effective.runtimeDir / L"android" / L"kernel";
@@ -217,6 +311,10 @@ bool VmController::Start(HWND renderParent, const VmConfig& config, std::wstring
         !std::filesystem::exists(initrd) ||
         !std::filesystem::exists(effective.systemDisk) ||
         !std::filesystem::exists(effective.dataDisk)) {
+        std::error_code ec;
+        std::filesystem::remove(sessionTokenFile_, ec);
+        sessionToken_.clear();
+        sessionTokenFile_.clear();
         if (error) *error = L"حزمة تشغيل جوال غير مكتملة.";
         return false;
     }
@@ -236,7 +334,11 @@ bool VmController::Start(HWND renderParent, const VmConfig& config, std::wstring
         effective.runtimeDir.c_str(), &startup, &pi);
 
     if (!created) {
+        std::error_code ec;
+        std::filesystem::remove(sessionTokenFile_, ec);
         runtimeDir_.clear();
+        sessionToken_.clear();
+        sessionTokenFile_.clear();
         if (error) *error = L"تعذر تشغيل Android. خطأ Windows: " + std::to_wstring(GetLastError());
         return false;
     }
@@ -269,7 +371,7 @@ bool VmController::Start(HWND renderParent, const VmConfig& config, std::wstring
 }
 
 bool VmController::SaveQuickResume(const std::filesystem::path& marker, std::wstring* error) {
-    if (!Running() || runtimeDir_.empty()) return false;
+    if (!Running() || runtimeDir_.empty() || !ValidSessionToken(sessionToken_)) return false;
 
     // Remove the previous authorization marker before touching VM state. If
     // savevm fails or Windows exits mid-save, a stale marker can never make the
@@ -298,8 +400,9 @@ bool VmController::SaveQuickResume(const std::filesystem::path& marker, std::wst
         if (error) *error = L"تم حفظ Snapshot لكن تعذر إنشاء علامة الاستئناف.";
         return false;
     }
-    out << "jawal_quick_resume_v2\n"
-        << "runtime=" << fingerprint << "\n";
+    out << "jawal_quick_resume_v3\n"
+        << "runtime=" << fingerprint << "\n"
+        << "session=" << sessionToken_ << "\n";
     return out.good();
 }
 
@@ -330,7 +433,12 @@ void VmController::Stop(bool tryQuickResume, const std::filesystem::path& marker
 
     CloseHandle(process_.hProcess);
     process_ = {};
+
+    std::error_code ec;
+    if (!sessionTokenFile_.empty()) std::filesystem::remove(sessionTokenFile_, ec);
     runtimeDir_.clear();
+    sessionTokenFile_.clear();
+    sessionToken_.clear();
 }
 
 void VmController::Resize() noexcept {
