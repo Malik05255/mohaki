@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
-"""Compute the local PE DLL dependency closure for Jawal's Windows runtime.
+"""Compute the PE DLL dependency closure for Jawal's Windows runtime.
 
 The scanner has no third-party Python dependencies. It reads PE import and
-DelayLoad tables, recursively follows DLLs present beside the supplied binaries,
-and can distinguish real Windows system DLLs from missing redistributable/runtime
-DLLs. In strict mode, an unresolved non-system dependency is a packaging error.
+DelayLoad tables, recursively follows DLLs from the runtime plus optional search
+directories, and distinguishes real Windows system DLLs from missing
+redistributable/runtime DLLs. In strict mode, an unresolved non-system
+dependency is a packaging error.
 """
 from __future__ import annotations
 
@@ -108,28 +109,44 @@ def is_api_set(name: str) -> bool:
     return name.startswith("api-ms-win-") or name.startswith("ext-ms-win-")
 
 
+def add_dll_directory(index: dict[str, Path], directory: Path) -> None:
+    if not directory.is_dir():
+        return
+    for path in directory.glob("*.dll"):
+        # First directory wins. The runtime directory is indexed first so an
+        # explicitly staged DLL always beats a toolchain copy with the same name.
+        index.setdefault(path.name.lower(), path.resolve())
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("runtime_dir", type=Path)
     ap.add_argument("roots", nargs="+")
     ap.add_argument("--json", dest="json_path", type=Path)
+    ap.add_argument("--search-dir", dest="search_dirs", action="append", default=[],
+                    help="additional directory containing redistributable DLLs; may be repeated")
     ap.add_argument("--system-dir", dest="system_dirs", action="append", default=[])
     ap.add_argument("--strict-local", action="store_true",
-                    help="fail if an imported DLL is neither local nor present in a system directory")
+                    help="fail if an imported DLL is neither local/searchable nor present in a system directory")
     args = ap.parse_args()
 
     root = args.runtime_dir.resolve()
-    local = {p.name.lower(): p for p in root.glob("*.dll")}
+    search_dirs = [Path(raw).resolve() for raw in args.search_dirs]
+    local: dict[str, Path] = {}
+    add_dll_directory(local, root)
+    for search_dir in search_dirs:
+        add_dll_directory(local, search_dir)
+
     roots = [root / name for name in args.roots]
-    for p in roots:
-        if not p.is_file():
-            raise SystemExit(f"root PE missing: {p}")
+    for path in roots:
+        if not path.is_file():
+            raise SystemExit(f"root PE missing: {path}")
 
     system_names: set[str] = set()
     for raw in args.system_dirs:
         system_dir = Path(raw)
         if system_dir.is_dir():
-            system_names.update(p.name.lower() for p in system_dir.glob("*.dll"))
+            system_names.update(path.name.lower() for path in system_dir.glob("*.dll"))
 
     queue = roots[:]
     visited: set[Path] = set()
@@ -164,14 +181,16 @@ def main() -> int:
         if missing_here:
             unresolved[current.name] = missing_here
 
-    ordered = [required[k] for k in sorted(required)]
-    for p in ordered:
-        print(p.name)
+    ordered = [required[key] for key in sorted(required)]
+    for path in ordered:
+        print(path.name)
 
     result = {
-        "roots": [p.name for p in roots],
+        "roots": [path.name for path in roots],
+        "searchDirs": [str(path) for path in search_dirs],
         "localDllCount": len(ordered),
-        "localDlls": [p.name for p in ordered],
+        "localDlls": [path.name for path in ordered],
+        "localDllSources": {path.name: str(path) for path in ordered},
         "systemImports": system_imports,
         "unresolvedNonSystemImports": unresolved,
         "strictLocal": args.strict_local,
