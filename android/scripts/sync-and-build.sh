@@ -73,8 +73,9 @@ rsync -a --delete "$ROOT/android/smoke-app/" vendor/jawal/smoke-app/
 
 # The synced Android-x86 device tree targets arbitrary physical PCs. Apply only
 # exact, guarded edits that remove hardware Jawal's fixed QEMU/WHPX machine can
-# never expose. The patcher fails closed when upstream source changes.
+# never expose. Both patchers fail closed when upstream source changes.
 python3 "$ROOT/tools/apply-jawal-upstream-pruning.py" "$AOSP_DIR"
+python3 "$ROOT/tools/apply-jawal-product-pruning.py" "$AOSP_DIR"
 
 export AOSP_DIR
 "$ROOT/tools/fetch-store.sh" "$AOSP_DIR/vendor/jawal/store/AuroraStore.apk"
@@ -135,6 +136,7 @@ python3 "$ROOT/tools/analyze-jawalos-size.py" \
   printf 'kernel_diffconfig=%s\n' 'device/jawal/jawal-kernel-minimal.config'
   printf 'physical_firmware_projects=%s\n' 'excluded-before-sync'
   printf 'intel_physical_media_projects=%s\n' 'excluded-before-sync'
+  printf 'android_ota_recovery=%s\n' 'disabled-at-source'
 } > "$OUT_DIR/build-metadata.txt"
 
 "$ROOT/tools/validate-product.sh" "$PRODUCT_OUT" "$OUT_DIR"
