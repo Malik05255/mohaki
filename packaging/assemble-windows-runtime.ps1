@@ -18,6 +18,7 @@ $repoRoot = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
 $qemuRoot = (Resolve-Path $QemuDir).Path
 $androidRoot = (Resolve-Path (Join-Path $repoRoot $AndroidRuntimeDir)).Path
 $output = Join-Path $repoRoot $OutputDir
+$reportRoot = Join-Path $repoRoot "dist\reports\runtime"
 
 $qemuExe = Join-Path $qemuRoot "qemu-system-x86_64.exe"
 $qemuImg = Join-Path $qemuRoot "qemu-img.exe"
@@ -31,15 +32,18 @@ Require-File (Join-Path $androidRoot "images\jawal-data-template.qcow2") "Jawal 
 if (Test-Path $output) {
     Remove-Item $output -Recurse -Force
 }
+if (Test-Path $reportRoot) {
+    Remove-Item $reportRoot -Recurse -Force
+}
 New-Item $output -ItemType Directory | Out-Null
 New-Item (Join-Path $output "qemu") -ItemType Directory | Out-Null
 New-Item (Join-Path $output "firmware") -ItemType Directory | Out-Null
-New-Item (Join-Path $output "reports") -ItemType Directory | Out-Null
+New-Item $reportRoot -ItemType Directory -Force | Out-Null
 
 Copy-Item (Join-Path $androidRoot "android") $output -Recurse
 Copy-Item (Join-Path $androidRoot "images") $output -Recurse
 if (Test-Path (Join-Path $androidRoot "reports")) {
-    Copy-Item (Join-Path $androidRoot "reports\*") (Join-Path $output "reports") -Force
+    Copy-Item (Join-Path $androidRoot "reports\*") $reportRoot -Force
 }
 
 # Copy only the two QEMU tools Jawal actually executes.
@@ -57,7 +61,7 @@ if (-not $python) {
 }
 $scanner = Join-Path $repoRoot "tools\pe-dependency-closure.py"
 Require-File $scanner "QEMU PE dependency scanner"
-$depReport = Join-Path $output "reports\qemu-dependencies.json"
+$depReport = Join-Path $reportRoot "qemu-dependencies.json"
 $scannerArgs = @(
     $scanner,
     $qemuRoot,
@@ -165,10 +169,11 @@ $firmwareMiB = [Math]::Round($firmwareBytes / 1MB, 1)
     firmwareMiB = $firmwareMiB
     firmwareFileCount = $firmwareFiles.Count
     integrityEntries = $lines.Count
-} | ConvertTo-Json | Set-Content (Join-Path $output "reports\runtime-size.json") -Encoding UTF8
+} | ConvertTo-Json | Set-Content (Join-Path $reportRoot "runtime-size.json") -Encoding UTF8
 
 Write-Host "Jawal Windows runtime assembled: $sizeMiB MiB"
 Write-Host "Minimal QEMU payload: $qemuMiB MiB across $($qemuFiles.Count) files"
 Write-Host "Firmware payload: $firmwareMiB MiB across $($firmwareFiles.Count) files"
+Write-Host "Build evidence kept outside install runtime: $reportRoot"
 Write-Host "Integrity manifest entries: $($lines.Count)"
 Write-Host $output
