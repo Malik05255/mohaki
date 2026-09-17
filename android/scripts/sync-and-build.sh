@@ -44,17 +44,23 @@ fi
 
 # These projects exist only to support arbitrary physical PCs. Jawal's fixed
 # QEMU/WHPX machine uses virtio devices plus emulated HDA/xHCI and needs none of
-# their firmware. Excluding them before repo sync saves builder disk/network in
-# addition to keeping the final product free of dead firmware blobs.
+# their firmware or Intel physical-GPU VA/OMX stack. Excluding them before repo
+# sync saves builder disk/network; FFmpeg/MediaCodec/Codec2 remain in-tree.
 mkdir -p .repo/local_manifests
-cat > .repo/local_manifests/jawal-minimal-firmware.xml <<'XML'
+cat > .repo/local_manifests/jawal-minimal-physical-hardware.xml <<'XML'
 <?xml version="1.0" encoding="UTF-8"?>
 <manifest>
   <remove-project name="device_generic_firmware" />
   <remove-project name="vendor_intel_proprietary_sof-bin" />
   <remove-project name="vendor_silead_proprietary_firmware" />
+  <remove-project name="hardware_intel_common_libva" />
+  <remove-project name="external_libva-utils" />
+  <remove-project name="hardware_intel_common_gmmlib" />
+  <remove-project name="hardware_intel_common_media-driver" />
+  <remove-project name="platform_hardware_intel_common_vaapi" />
 </manifest>
 XML
+rm -f .repo/local_manifests/jawal-minimal-firmware.xml
 
 repo sync -c --force-sync --no-tags --no-clone-bundle --optimized-fetch --prune -j"${JAWAL_SYNC_JOBS:-8}"
 
@@ -128,6 +134,7 @@ python3 "$ROOT/tools/analyze-jawalos-size.py" \
   printf 'lunch_target=%s\n' "$LUNCH_TARGET"
   printf 'kernel_diffconfig=%s\n' 'device/jawal/jawal-kernel-minimal.config'
   printf 'physical_firmware_projects=%s\n' 'excluded-before-sync'
+  printf 'intel_physical_media_projects=%s\n' 'excluded-before-sync'
 } > "$OUT_DIR/build-metadata.txt"
 
 "$ROOT/tools/validate-product.sh" "$PRODUCT_OUT" "$OUT_DIR"
