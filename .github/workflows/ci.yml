@@ -83,3 +83,35 @@ jobs:
           python3 -m py_compile tools/enforce-pruning-budget.py
           python3 -m py_compile tools/pe-dependency-closure.py
           python3 -m py_compile tools/apply-jawal-upstream-pruning.py
+
+      - name: Exercise measured pruning budget gate
+        run: |
+          mkdir -p build/pruning-gate
+          cat > build/pruning-gate/pass.json <<'JSON'
+          {
+            "measuredPruning": {
+              "tierATotalMiB": 8.5,
+              "largestTierAFileMiB": 2.25
+            },
+            "safeReviewCandidates": []
+          }
+          JSON
+          python3 tools/enforce-pruning-budget.py build/pruning-gate/pass.json \
+            --max-tier-a-total-mib 12 --max-tier-a-file-mib 4
+
+          cat > build/pruning-gate/fail.json <<'JSON'
+          {
+            "measuredPruning": {
+              "tierATotalMiB": 20.0,
+              "largestTierAFileMiB": 7.0
+            },
+            "safeReviewCandidates": [
+              {"sizeMiB": 7.0, "path": "product/app/UnusedDemo/UnusedDemo.apk"}
+            ]
+          }
+          JSON
+          if python3 tools/enforce-pruning-budget.py build/pruning-gate/fail.json \
+            --max-tier-a-total-mib 12 --max-tier-a-file-mib 4; then
+            echo "Expected pruning gate to reject oversized Tier A candidates." >&2
+            exit 1
+          fi
