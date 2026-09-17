@@ -17,6 +17,16 @@ EMULATOR_VENDOR_NO_REBOOT_ESCROW := true
 
 $(call inherit-product, device/generic/common/x86_64.mk)
 
+# The Android-x86 QPR2 manifest still syncs Bliss' vendor/microg tree, but the
+# x86-specific vendor/bliss overlay does not currently inherit it from
+# BLISS_BUILD_VARIANT. Make Jawal's service contract explicit so a requested
+# microG image cannot silently become vanilla when upstream product wiring
+# changes. sync-and-build.sh validates this file before Soong starts, and the
+# post-build gate proves GmsCore/FakeStore actually reached PRODUCT_OUT.
+ifeq ($(JAWAL_SERVICES_VARIANT),microg)
+$(call inherit-product, vendor/microg/products/gms.mk)
+endif
+
 # Strip inherited Android/Bliss user apps, PC-distribution utilities and fixed-
 # VM hardware helpers only after the upstream x86 device layer declares them.
 $(call inherit-product, device/jawal/prune.mk)
