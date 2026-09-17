@@ -6,9 +6,10 @@ AOSP_DIR="${JAWAL_AOSP_DIR:-$ROOT/.work/android-src}"
 OUT_DIR="${JAWAL_ARTIFACTS_DIR:-$ROOT/dist/android}"
 MANIFEST_URL="https://github.com/BlissOS/platform_manifest.git"
 MANIFEST_BRANCH="${JAWAL_ANDROID_BRANCH:-voyager-x86-qpr2}"
-BUILD_VARIANT="${JAWAL_SERVICES_VARIANT:-microg}"
+BUILD_VARIANT="${JAWAL_SERVICES_VARIANT:-vanilla}"
 BUILD_TYPE="${JAWAL_BUILD_TYPE:-user}"
 NATIVE_BRIDGE="${JAWAL_NATIVE_BRIDGE:-none}"
+MICROG_VENDOR_DIR="${JAWAL_MICROG_VENDOR_DIR:-}"
 STORE_VERSION="${AURORA_VERSION:-4.8.4}"
 LUNCH_TARGET="jawal_x86_64-ap4a-${BUILD_TYPE}"
 
@@ -30,6 +31,13 @@ esac
 for tool in git repo rsync python3 curl; do
   command -v "$tool" >/dev/null || { echo "Missing build tool: $tool" >&2; exit 2; }
 done
+
+if [[ "$BUILD_VARIANT" == "microg" && -n "$MICROG_VENDOR_DIR" ]]; then
+  if [[ ! -f "$MICROG_VENDOR_DIR/products/gms.mk" ]]; then
+    echo "JAWAL_MICROG_VENDOR_DIR does not contain products/gms.mk: $MICROG_VENDOR_DIR" >&2
+    exit 8
+  fi
+fi
 
 mkdir -p "$AOSP_DIR" "$OUT_DIR"
 cd "$AOSP_DIR"
@@ -63,14 +71,20 @@ cat > .repo/local_manifests/jawal-minimal-physical-hardware.xml <<'XML'
 XML
 rm -f .repo/local_manifests/jawal-minimal-firmware.xml
 
-# Fail before downloading the Android source if the requested service tree is
-# absent from the resolved manifest. `repo list` only sees checked-out projects,
-# so use the resolved XML here because this check intentionally runs pre-sync.
+# voyager-x86-qpr2 currently resolves no vendor/microg project. Keep the open
+# build deterministic by defaulting to vanilla + Aurora. microG remains opt-in:
+# either a future upstream manifest may restore vendor/microg, or the builder
+# can provide a QPR2-compatible tree through JAWAL_MICROG_VENDOR_DIR. Reject an
+# unsupported request before a multi-hour source sync.
 if [[ "$BUILD_VARIANT" == "microg" ]]; then
   resolved_manifest_before_sync="$(repo manifest)"
-  if ! grep -Eq '<project[^>]+path="vendor/microg"([[:space:]/>])' <<<"$resolved_manifest_before_sync"; then
-    echo "microG build requested but vendor/microg is absent from the resolved $MANIFEST_BRANCH manifest." >&2
-    echo "Refusing to start a large repo sync that cannot produce the requested service variant." >&2
+  manifest_has_microg=0
+  if grep -Eq '<project[^>]+path="vendor/microg"([[:space:]/>])' <<<"$resolved_manifest_before_sync"; then
+    manifest_has_microg=1
+  fi
+  if (( manifest_has_microg == 0 )) && [[ -z "$MICROG_VENDOR_DIR" ]]; then
+    echo "microG was requested, but $MANIFEST_BRANCH does not provide vendor/microg." >&2
+    echo "Supply a QPR2-compatible microG vendor tree with JAWAL_MICROG_VENDOR_DIR, or build the default vanilla image." >&2
     exit 8
   fi
 fi
@@ -123,13 +137,22 @@ for path in "${pruned_source_paths[@]}"; do
   fi
 done
 
-# Fail before Soong starts if the requested service flavor was not actually
-# delivered by the synced Bliss manifest. A missing microG product inheritance
-# should not consume hours of CPU only to fail or silently produce vanilla.
+# If upstream did not sync microG but an explicit compatible tree was supplied,
+# stage it now, before product makefiles are parsed. No microG/GMS blobs are
+# committed to Jawal itself.
+if [[ "$BUILD_VARIANT" == "microg" && ! -f vendor/microg/products/gms.mk ]]; then
+  if [[ -z "$MICROG_VENDOR_DIR" || ! -f "$MICROG_VENDOR_DIR/products/gms.mk" ]]; then
+    echo "microG build requested but no compatible vendor/microg tree is available after sync." >&2
+    exit 8
+  fi
+  rm -rf vendor/microg
+  mkdir -p vendor/microg
+  rsync -a --delete "$MICROG_VENDOR_DIR/" vendor/microg/
+fi
+
 if [[ "$BUILD_VARIANT" == "microg" ]]; then
   if [[ ! -f vendor/microg/products/gms.mk ]]; then
-    echo "microG build requested but vendor/microg/products/gms.mk is missing after repo sync." >&2
-    echo "Verify the voyager-x86-qpr2 manifest includes the Bliss microG vendor project." >&2
+    echo "microG build requested but vendor/microg/products/gms.mk is missing." >&2
     exit 8
   fi
   if ! grep -Eq 'GmsCore|FakeStore|microg|MicroG' vendor/microg/products/gms.mk; then
@@ -219,6 +242,11 @@ python3 "$ROOT/tools/analyze-jawalos-size.py" \
   printf 'user_data_model=%s\n' 'standalone-qcow2-v1'
   printf 'repo_sync_attempts=%s\n' "$sync_attempt"
   printf 'repo_sync_final_jobs=%s\n' "$sync_jobs"
+  if [[ "$BUILD_VARIANT" == "microg" ]]; then
+    printf 'microg_source=%s\n' "$([[ -n "$MICROG_VENDOR_DIR" ]] && printf external-compatible-tree || printf upstream-manifest)"
+  else
+    printf 'microg_source=%s\n' 'none'
+  fi
 } > "$OUT_DIR/build-metadata.txt"
 
 "$ROOT/tools/validate-product.sh" "$PRODUCT_OUT" "$OUT_DIR"
