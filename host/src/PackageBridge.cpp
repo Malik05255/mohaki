@@ -6,7 +6,9 @@
 
 #include <array>
 #include <chrono>
+#include <cctype>
 #include <cstdint>
+#include <filesystem>
 #include <fstream>
 #include <string>
 #include <thread>
@@ -15,13 +17,14 @@ namespace jawal {
 namespace {
 
 constexpr std::uint32_t kPackageMagic = 0x4A41504B; // JAPK
-constexpr std::uint32_t kPackageProtocolVersion = 2;
+constexpr std::uint32_t kPackageProtocolVersion = 3;
 constexpr std::uint32_t kFileMagic = 0x4A46494C; // JFIL
-constexpr std::uint32_t kFileProtocolVersion = 1;
+constexpr std::uint32_t kFileProtocolVersion = 2;
 constexpr unsigned short kPackagePort = 27183;
 constexpr unsigned short kControlPort = 27185;
 constexpr unsigned short kFilePort = 27188;
 constexpr std::uint64_t kMaximumTransferBytes = 16ull * 1024ull * 1024ull * 1024ull;
+constexpr std::size_t kSessionTokenChars = 64;
 
 bool SendAll(SOCKET socket, const char* data, std::size_t size) {
     while (size > 0) {
@@ -62,6 +65,44 @@ bool SendU64(SOCKET socket, std::uint64_t value) {
         value >>= 8u;
     }
     return SendAll(socket, reinterpret_cast<const char*>(bytes.data()), bytes.size());
+}
+
+std::filesystem::path SessionTokenPath() {
+    std::array<wchar_t, 32768> buffer{};
+    const DWORD chars = GetEnvironmentVariableW(L"LOCALAPPDATA", buffer.data(), static_cast<DWORD>(buffer.size()));
+    if (chars == 0 || chars >= buffer.size()) return {};
+    return std::filesystem::path(buffer.data()) / L"Jawal" / L"session.token";
+}
+
+bool ValidSessionToken(const std::string& token) {
+    if (token.size() != kSessionTokenChars) return false;
+    for (const unsigned char c : token) {
+        if (!std::isxdigit(c)) return false;
+    }
+    return true;
+}
+
+bool ReadSessionToken(std::string* token) {
+    if (!token) return false;
+    token->clear();
+    const auto path = SessionTokenPath();
+    if (path.empty()) return false;
+
+    std::ifstream input(path);
+    std::string value;
+    if (!input || !std::getline(input, value)) return false;
+    while (!value.empty() && (value.back() == '\r' || value.back() == '\n' || value.back() == ' ' || value.back() == '\t')) {
+        value.pop_back();
+    }
+    if (!ValidSessionToken(value)) return false;
+    *token = std::move(value);
+    return true;
+}
+
+bool SendSessionToken(SOCKET socket, const std::string& token) {
+    return ValidSessionToken(token) &&
+           SendU32(socket, static_cast<std::uint32_t>(token.size())) &&
+           SendAll(socket, token.data(), token.size());
 }
 
 SOCKET ConnectToGuest(unsigned short port, int attempts) {
@@ -107,6 +148,7 @@ std::wstring InstallStatusText(int status) {
     case -10: return L"رفض Android قناة التثبيت لسبب أمني.";
     case -11: return L"إصدار قناة التثبيت غير متوافق.";
     case -12: return L"حجم ملف APK غير صالح.";
+    case -13: return L"رفض Android مفتاح جلسة التثبيت.";
     default: return L"تعذر إكمال تثبيت APK.";
     }
 }
@@ -140,6 +182,13 @@ PackageInstallResult InstallApk(const std::filesystem::path& apk) {
         return result;
     }
 
+    std::string sessionToken;
+    if (!ReadSessionToken(&sessionToken)) {
+        result.status = -106;
+        result.detail = L"جلسة جوال الآمنة غير متاحة. شغّل جوال وانتظر اكتمال Android ثم حاول مرة أخرى.";
+        return result;
+    }
+
     WSADATA wsa{};
     if (WSAStartup(MAKEWORD(2, 2), &wsa) != 0) {
         result.status = -102;
@@ -161,6 +210,7 @@ PackageInstallResult InstallApk(const std::filesystem::path& apk) {
 
     bool ok = SendU32(socket, kPackageMagic) &&
               SendU32(socket, kPackageProtocolVersion) &&
+              SendSessionToken(socket, sessionToken) &&
               SendU64(socket, static_cast<std::uint64_t>(size)) &&
               StreamFile(socket, input);
 
@@ -212,6 +262,13 @@ FileTransferResult SendFileToGuest(const std::filesystem::path& file) {
         return result;
     }
 
+    std::string sessionToken;
+    if (!ReadSessionToken(&sessionToken)) {
+        result.status = -206;
+        result.detail = L"جلسة جوال الآمنة غير متاحة.";
+        return result;
+    }
+
     WSADATA wsa{};
     if (WSAStartup(MAKEWORD(2, 2), &wsa) != 0) {
         result.status = -203;
@@ -232,6 +289,7 @@ FileTransferResult SendFileToGuest(const std::filesystem::path& file) {
 
     bool ok = SendU32(socket, kFileMagic) &&
               SendU32(socket, kFileProtocolVersion) &&
+              SendSessionToken(socket, sessionToken) &&
               SendU32(socket, static_cast<std::uint32_t>(name.size())) &&
               SendU64(socket, static_cast<std::uint64_t>(size)) &&
               SendAll(socket, name.data(), name.size()) &&
@@ -250,12 +308,15 @@ FileTransferResult SendFileToGuest(const std::filesystem::path& file) {
     result.status = static_cast<std::int32_t>(status);
     result.detail = result.status == 0
         ? L"تم نسخ الملف إلى Downloads/Jawal داخل Android."
-        : L"فشل حفظ الملف داخل Android.";
+        : (result.status == -25 ? L"رفض Android مفتاح جلسة نقل الملفات." : L"فشل حفظ الملف داخل Android.");
     return result;
 }
 
 bool GuestControl(const std::string& command, std::string* response) {
     if (response) response->clear();
+
+    std::string sessionToken;
+    if (!ReadSessionToken(&sessionToken)) return false;
 
     WSADATA wsa{};
     if (WSAStartup(MAKEWORD(2, 2), &wsa) != 0) return false;
@@ -270,7 +331,7 @@ bool GuestControl(const std::string& command, std::string* response) {
     setsockopt(socket, SOL_SOCKET, SO_RCVTIMEO, reinterpret_cast<const char*>(&timeoutMs), sizeof(timeoutMs));
     setsockopt(socket, SOL_SOCKET, SO_SNDTIMEO, reinterpret_cast<const char*>(&timeoutMs), sizeof(timeoutMs));
 
-    const std::string payload = command + "\n";
+    const std::string payload = "AUTH " + sessionToken + " " + command + "\n";
     bool ok = SendAll(socket, payload.data(), payload.size());
     std::string reply;
     if (ok) {
