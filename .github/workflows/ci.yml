@@ -112,11 +112,12 @@ jobs:
               $(if $(wildcard $(PRODUCT_DIR)init.recovery.$(TARGET_PRODUCT).rc),$(PRODUCT_DIR)init.recovery.$(TARGET_PRODUCT).rc,$(LOCAL_PATH)/init.recovery.x86.rc):$(TARGET_COPY_OUT_RECOVERY)/root/init.recovery.$(TARGET_PRODUCT).rc \
               $(if $(wildcard $(PRODUCT_DIR)init.recovery.sh),$(PRODUCT_DIR),$(LOCAL_PATH)/)init.recovery.sh:$(TARGET_COPY_OUT_RECOVERY)/root/system/etc/init.recovery.sh \
               $(if $(wildcard $(PRODUCT_DIR)init.fstab.sh),$(PRODUCT_DIR),$(LOCAL_PATH)/)init.fstab.sh:$(TARGET_COPY_OUT_RECOVERY)/root/system/etc/init.fstab.sh \
+          $(call inherit-product-if-exists,external/tslib/tslib.mk)
           MAKEFILE
           python3 tools/apply-jawal-product-pruning.py "$root"
           grep -q '^PRODUCT_BUILD_GENERIC_OTA_PACKAGE := false$' "$root/device/generic/common/device.mk"
-          if grep -Eq 'update_engine|otapreopt_script|TARGET_COPY_OUT_RECOVERY|bootctl' "$root/device/generic/common/device.mk"; then
-            echo "OTA/recovery source pruning left dead machinery in the fixture." >&2
+          if grep -Eq 'update_engine|otapreopt_script|TARGET_COPY_OUT_RECOVERY|bootctl|external/tslib' "$root/device/generic/common/device.mk"; then
+            echo "OTA/recovery/physical-input source pruning left dead machinery in the fixture." >&2
             cat "$root/device/generic/common/device.mk"
             exit 1
           fi
