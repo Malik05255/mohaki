@@ -4,6 +4,7 @@ set -euo pipefail
 ISO="${1:?usage: package-runtime.sh JAWAL_ANDROID_ISO OUTPUT_RUNTIME_DIR}"
 RUNTIME="${2:?usage: package-runtime.sh JAWAL_ANDROID_ISO OUTPUT_RUNTIME_DIR}"
 DATA_GIB="${JAWAL_DATA_GIB:-128}"
+SOURCE_REPORT_DIR="$(cd "$(dirname "$ISO")" && pwd)"
 
 for tool in bsdtar qemu-img mkfs.ext4 mount umount mountpoint truncate python3; do
   command -v "$tool" >/dev/null || { echo "Missing packaging tool: $tool" >&2; exit 2; }
@@ -43,6 +44,22 @@ system_payload="$(find_one system.sfs || true)"
 
 cp -f "$kernel" "$RUNTIME/android/kernel"
 cp -f "$initrd" "$RUNTIME/android/initrd.img"
+
+# Preserve measured Android-build evidence with the runtime artifact. This makes
+# the next pruning pass deterministic instead of relying on stale CI logs.
+for report in \
+  validation.txt \
+  largest-files.tsv \
+  product-files.tsv \
+  size-analysis.json \
+  size-analysis.md \
+  pruning-plan.md \
+  build-metadata.txt \
+  image-size.txt; do
+  if [[ -f "$SOURCE_REPORT_DIR/$report" ]]; then
+    cp -f "$SOURCE_REPORT_DIR/$report" "$RUNTIME/reports/$report"
+  fi
+done
 
 # The immutable system disk only contains Android's already-compressed system.sfs
 # (or system.img) plus optional ramdisk. It is always attached read-only by Jawal,
