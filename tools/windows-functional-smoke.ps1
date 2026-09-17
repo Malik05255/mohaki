@@ -13,6 +13,9 @@ $apkPath = (Resolve-Path $SmokeApk).Path
 $repoRoot = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
 $probeScript = Join-Path $PSScriptRoot "probe-guest.ps1"
 $installScript = Join-Path $PSScriptRoot "install-smoke-apk.ps1"
+$sessionAuthScript = Join-Path $PSScriptRoot "windows-session-auth-smoke.ps1"
+$sessionAuthReportRelative = "dist/reports/session-auth-smoke.json"
+$sessionAuthReport = Join-Path $repoRoot $sessionAuthReportRelative
 
 $reportFile = Join-Path $repoRoot $ReportPath
 $reportDir = Split-Path -Parent $reportFile
@@ -28,17 +31,41 @@ try {
         -RequireAudio \
         -RequirePhoneFeatures
 
+    # Before exercising the authorized PackageInstaller path, prove that every
+    # host-forwarded localhost bridge rejects clients that do not possess the
+    # per-boot 256-bit Jawal session token.
+    & $sessionAuthScript -ReportPath $sessionAuthReportRelative
+    if (-not (Test-Path -LiteralPath $sessionAuthReport -PathType Leaf)) {
+        throw "Session authentication smoke did not produce its evidence report."
+    }
+    $sessionAuth = Get-Content -LiteralPath $sessionAuthReport -Raw | ConvertFrom-Json
+    if (-not $sessionAuth.passed) {
+        throw "Session authentication smoke reported passed=false."
+    }
+
     & $installScript -ApkPath $apkPath -TimeoutSeconds $TimeoutSeconds
+
+    # Re-probe after the negative-auth traffic and authorized APK install. This
+    # proves rejected clients did not destabilize or poison the live bridge.
+    $healthAfter = & $probeScript \
+        -TimeoutSeconds 30 \
+        -RequireWebView \
+        -RequireNetwork \
+        -RequireAudio \
+        -RequirePhoneFeatures
 
     $report = [ordered]@{
         passed = $true
         apkInstallPassed = $true
-        android = $health
+        sessionAuthenticationPassed = $true
+        sessionAuthentication = $sessionAuth
+        android = $healthAfter
+        initialAndroid = $health
         startedAtUtc = $started.ToString("o")
         completedAtUtc = [DateTime]::UtcNow.ToString("o")
     }
     $report | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath $reportFile -Encoding UTF8
-    Write-Host "PASS: Jawal functional smoke completed, including PackageInstaller."
+    Write-Host "PASS: Jawal functional smoke completed, including authenticated bridges and PackageInstaller."
     Write-Host "Report: $reportFile"
 }
 finally {
