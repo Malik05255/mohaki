@@ -33,11 +33,12 @@ PRODUCT_MANUFACTURER := Jawal
 # footprint. Framework/font pieces needed for application rendering remain.
 PRODUCT_LOCALES := ar_SA en_US
 
-# Compress pre-installed APEX payloads. This is a packaging/storage optimization
-# supported by modern Android; it does not remove APIs or runtime functionality.
-# Keep it enabled for the production-oriented Jawal image so system size is not
-# wasted on uncompressed modular system payloads.
-PRODUCT_COMPRESSED_APEX := true
+# Keep APEX uncompressed at the Android layer. Compressed APEX can make the
+# immutable system image look smaller while requiring decompression/caching on
+# user data during boot. Jawal optimizes true installed/runtime size by removing
+# unused modules instead of trading boot latency and writable-data growth for an
+# artificially smaller system artifact.
+PRODUCT_COMPRESSED_APEX := false
 
 PRODUCT_SYSTEM_PROPERTIES += \
     ro.jawal.runtime=true \
