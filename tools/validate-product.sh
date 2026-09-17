@@ -80,6 +80,21 @@ else
   fail "debug.sf.nobootanimation=1 missing from built product properties"
 fi
 
+# The upstream x86 product identifies itself as a tablet. Jawal must override
+# that inherited value after product inheritance so framework/app configuration
+# is consistently phone-oriented as well as visually portrait-shaped.
+characteristics="$(find "$PRODUCT_OUT" -name build.prop -type f -exec grep -h '^ro\.build\.characteristics=' {} + 2>/dev/null || true)"
+if grep -Eq '(^|=|,)phone(,|$)' <<<"$characteristics"; then
+  pass "Build characteristics include phone"
+else
+  fail "ro.build.characteristics does not include phone"
+fi
+if grep -Eq '(^|=|,)tablet(,|$)' <<<"$characteristics"; then
+  fail "Tablet build characteristic leaked into JawalOS"
+else
+  pass "Tablet build characteristic absent"
+fi
+
 require_path() {
   local label="$1"; shift
   local found=""
