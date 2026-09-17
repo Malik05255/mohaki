@@ -7,6 +7,7 @@
 <permissions>
     <!-- Core app/UI capabilities. -->
     <feature name="android.hardware.audio.output" />
+    <feature name="android.hardware.microphone" />
     <feature name="android.hardware.touchscreen" />
     <feature name="android.hardware.screen.portrait" />
     <feature name="android.hardware.screen.landscape" />
@@ -24,10 +25,11 @@
 
     <!--
       Intentionally absent in v1: camera, Bluetooth, Wi-Fi radio, NFC, UWB,
-      telephony/SIM, physical sensors, microphone passthrough, printing,
-      companion-device setup and Android-side backup.
+      telephony/SIM, physical sensors, printing, companion-device setup and
+      Android-side backup.
 
       Internet access is provided by virtio-net/NAT and does not require an
-      android.hardware.wifi declaration.
+      android.hardware.wifi declaration. Audio input/output is exposed through
+      Jawal's duplex virtual audio device, so microphone remains a real feature.
     -->
 </permissions>
