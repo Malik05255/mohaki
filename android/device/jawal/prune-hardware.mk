@@ -12,6 +12,7 @@ JAWAL_REMOVE_HARDWARE_PACKAGES := \
     bt_vhci_forwarder \
     mac80211_create_radios \
     SdkSetup \
+    bootanimation \
     atrace \
     bugreport \
     bugreportz \
@@ -29,6 +30,10 @@ JAWAL_REMOVE_HARDWARE_PACKAGES := \
 # - neuralnetworks: NNAPI compatibility
 # - graphics/audio/media C2 services and codecs
 # - netd/NetworkStack/DnsResolver and virtio networking path
+#
+# Android's bootanimation executable is intentionally removed: Jawal owns the
+# boot UX in the Windows host and PRODUCT_SYSTEM_PROPERTIES sets
+# debug.sf.nobootanimation=1, so SurfaceFlinger must not request this service.
 PRODUCT_PACKAGES := $(filter-out $(JAWAL_REMOVE_HARDWARE_PACKAGES),$(PRODUCT_PACKAGES))
 PRODUCT_PACKAGES_DEBUG := $(filter-out $(JAWAL_REMOVE_HARDWARE_PACKAGES),$(PRODUCT_PACKAGES_DEBUG))
 
