@@ -2,9 +2,9 @@
 """Apply guarded, Jawal-specific reductions to the synced Android-x86 device tree.
 
 The synced Bliss/Android-Generic source targets arbitrary physical PCs. Jawal is a
-fixed QEMU/WHPX virtual phone, so Bluetooth/GPS physical hardware and generic
-sensor HALs are dead weight. Patches are exact and fail closed when upstream
-changes, preventing silent edits to unexpected source.
+fixed QEMU/WHPX virtual phone, so Bluetooth/GPS physical hardware, generic sensor
+HALs and their physical-PC init paths are dead weight. Patches are exact and fail
+closed when upstream changes, preventing silent edits to unexpected source.
 """
 from __future__ import annotations
 
@@ -41,6 +41,7 @@ def main() -> int:
 
     board = root / "device/generic/common/BoardConfig.mk"
     device = root / "device/generic/common/device.mk"
+    init_sh = root / "device/generic/common/init.sh"
 
     replacements = [
         (board, "BOARD_HAVE_BLUETOOTH := true", "BOARD_HAVE_BLUETOOTH := false", "disable physical Bluetooth board support"),
@@ -59,6 +60,16 @@ def main() -> int:
             "# Jawal: physical sensor HAL inheritance intentionally omitted",
             "omit generic physical sensors product inheritance",
         ),
+        (init_sh, "\tset_custom_ota\n", "\t# Jawal: Android-x86 OTA setup omitted\n", "skip Android-x86 OTA init"),
+        (init_sh, "\tinit_hal_brcm_wifi\n", "\t# Jawal: physical Wi-Fi init omitted\n", "skip physical Wi-Fi init"),
+        (init_sh, "\tinit_hal_bluetooth\n", "\t# Jawal: physical Bluetooth init omitted\n", "skip physical Bluetooth init"),
+        (init_sh, "\tinit_hal_camera\n", "\t# Jawal: physical camera init omitted\n", "skip physical camera init"),
+        (init_sh, "\tinit_hal_gps\n", "\t# Jawal: physical GPS init omitted\n", "skip physical GPS init"),
+        (init_sh, "\tinit_hal_sensors\n", "\t# Jawal: physical sensor init omitted\n", "skip physical sensors init"),
+        (init_sh, "\tinit_hal_surface\n", "\t# Jawal: Microsoft Surface hardware init omitted\n", "skip Surface-specific init"),
+        (init_sh, "\tinit_tscal\n", "\t# Jawal: physical touchscreen calibration omitted\n", "skip touchscreen calibration init"),
+        (init_sh, "\tinit_ril\n", "\t# Jawal: radio/RIL init omitted\n", "skip telephony RIL init"),
+        (init_sh, "\tinit_prepare_ota\n", "\t# Jawal: OTA preparation omitted\n", "skip OTA preparation"),
     ]
 
     try:
