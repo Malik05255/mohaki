@@ -80,3 +80,4 @@ jobs:
           bash -n tools/build-arm64-smoke.sh
           python3 -m py_compile tools/analyze-jawalos-size.py
           python3 -m py_compile tools/pe-dependency-closure.py
+          python3 -m py_compile tools/apply-jawal-upstream-pruning.py
