@@ -3,7 +3,7 @@
 
 The synced Bliss/Android-Generic source targets arbitrary physical PCs. Jawal is a
 fixed QEMU/WHPX virtual phone, so physical Bluetooth/GPS/sensor stacks, physical
-GPU driver families, generic PC firmware and their init paths are dead weight.
+GPU/media driver families, generic PC firmware and their init paths are dead weight.
 Patches are exact and fail closed when upstream changes, preventing silent edits
 to unexpected source.
 """
@@ -83,6 +83,12 @@ def main() -> int:
             "drop physical and software Vulkan renderers; keep Virtio Vulkan only",
         ),
         (board, "BOARD_USE_LIBVA_INTEL_DRIVER := true", "BOARD_USE_LIBVA_INTEL_DRIVER := false", "disable Intel VA driver under Virtio GPU"),
+        (board, "BOARD_USE_LIBVA := true", "BOARD_USE_LIBVA := false", "disable VAAPI stack without a physical Intel GPU"),
+        (board, "BOARD_USE_LIBMIX := true", "BOARD_USE_LIBMIX := false", "disable Intel libmix media path"),
+        (board, "BOARD_USES_WRS_OMXIL_CORE := true", "BOARD_USES_WRS_OMXIL_CORE := false", "disable Intel WRS OMX core"),
+        (board, "USE_INTEL_OMX_COMPONENTS := true", "USE_INTEL_OMX_COMPONENTS := false", "disable Intel OMX components"),
+        (board, "BOARD_USES_IA_HWCOMPOSER := true", "BOARD_USES_IA_HWCOMPOSER := false", "disable Intel hardware composer path"),
+        (board, "BOARD_MESA3D_GALLIUM_VA := enabled", "BOARD_MESA3D_GALLIUM_VA := disabled", "disable Gallium VA frontend under Virtio GPU"),
         (board, "BOARD_USES_MINIGBM_INTEL := true", "BOARD_USES_MINIGBM_INTEL := false", "disable Intel-only minigbm backend"),
         (
             device,
