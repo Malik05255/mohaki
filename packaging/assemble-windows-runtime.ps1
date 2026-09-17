@@ -34,20 +34,36 @@ if (Test-Path $output) {
 New-Item $output -ItemType Directory | Out-Null
 New-Item (Join-Path $output "qemu") -ItemType Directory | Out-Null
 New-Item (Join-Path $output "firmware") -ItemType Directory | Out-Null
+New-Item (Join-Path $output "reports") -ItemType Directory | Out-Null
 
 Copy-Item (Join-Path $androidRoot "android") $output -Recurse
 Copy-Item (Join-Path $androidRoot "images") $output -Recurse
 
-# QEMU's Windows build needs several runtime DLLs beside the executable. Copy
-# only runtime files, never development headers/import libraries.
-$runtimePatterns = @(
-    "qemu-system-x86_64.exe",
-    "qemu-img.exe",
-    "*.dll"
-)
-foreach ($pattern in $runtimePatterns) {
-    Get-ChildItem -LiteralPath $qemuRoot -Filter $pattern -File -ErrorAction SilentlyContinue |
-        Copy-Item -Destination (Join-Path $output "qemu") -Force
+# Copy only the two QEMU tools Jawal actually executes.
+Copy-Item $qemuExe (Join-Path $output "qemu\qemu-system-x86_64.exe") -Force
+Copy-Item $qemuImg (Join-Path $output "qemu\qemu-img.exe") -Force
+
+# Do not ship every DLL from a full QEMU distribution. Compute the recursive PE
+# import closure for qemu-system-x86_64.exe + qemu-img.exe and copy only local
+# dependencies that those binaries really reference. This keeps the runtime
+# portable across QEMU builds without hard-coding a brittle DLL allowlist.
+$python = Get-Command python -ErrorAction SilentlyContinue
+if (-not $python) { $python = Get-Command python3 -ErrorAction SilentlyContinue }
+if (-not $python) {
+    throw "Python is required to compute the minimal QEMU DLL dependency closure."
+}
+$scanner = Join-Path $repoRoot "tools\pe-dependency-closure.py"
+Require-File $scanner "QEMU PE dependency scanner"
+$depReport = Join-Path $output "reports\qemu-dependencies.json"
+$dllNames = & $python.Source $scanner $qemuRoot `
+    "qemu-system-x86_64.exe" "qemu-img.exe" --json $depReport
+if ($LASTEXITCODE -ne 0) {
+    throw "Failed to compute QEMU DLL dependency closure."
+}
+foreach ($dllName in ($dllNames | Where-Object { $_ -and $_.Trim() } | Sort-Object -Unique)) {
+    $source = Join-Path $qemuRoot $dllName.Trim()
+    Require-File $source "QEMU dependency"
+    Copy-Item $source (Join-Path $output "qemu\$($dllName.Trim())") -Force
 }
 
 # Firmware location varies between QEMU Windows distributions.
@@ -75,7 +91,7 @@ foreach ($name in $licenseCandidates) {
 Require-File (Join-Path $output "qemu\qemu-system-x86_64.exe") "Packaged QEMU"
 Require-File (Join-Path $output "qemu\qemu-img.exe") "Packaged qemu-img"
 
-# Regenerate the manifest *after* Windows QEMU files are assembled. Jawal.exe
+# Regenerate the manifest after Windows QEMU files are assembled. Jawal.exe
 # verifies this manifest on every launch before starting Android.
 $critical = @(
     "android\kernel",
@@ -102,6 +118,18 @@ $lines | Set-Content -LiteralPath $manifest -Encoding ascii
 $files = Get-ChildItem $output -Recurse -File
 $totalBytes = ($files | Measure-Object Length -Sum).Sum
 $sizeMiB = [Math]::Round($totalBytes / 1MB, 1)
+$qemuFiles = Get-ChildItem (Join-Path $output "qemu") -File
+$qemuBytes = ($qemuFiles | Measure-Object Length -Sum).Sum
+$qemuMiB = [Math]::Round($qemuBytes / 1MB, 1)
+
+@{
+    runtimeMiB = $sizeMiB
+    qemuMiB = $qemuMiB
+    qemuFileCount = $qemuFiles.Count
+    integrityEntries = $lines.Count
+} | ConvertTo-Json | Set-Content (Join-Path $output "reports\runtime-size.json") -Encoding UTF8
+
 Write-Host "Jawal Windows runtime assembled: $sizeMiB MiB"
+Write-Host "Minimal QEMU payload: $qemuMiB MiB across $($qemuFiles.Count) files"
 Write-Host "Integrity manifest entries: $($lines.Count)"
 Write-Host $output
