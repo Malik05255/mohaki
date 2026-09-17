@@ -23,7 +23,7 @@ cleanup() {
 }
 trap cleanup EXIT
 
-mkdir -p "$work/iso" "$work/system-mnt" "$RUNTIME/android" "$RUNTIME/images"
+mkdir -p "$work/iso" "$work/system-mnt" "$RUNTIME/android" "$RUNTIME/images" "$RUNTIME/reports"
 bsdtar -xf "$ISO" -C "$work/iso"
 
 find_one() {
@@ -44,14 +44,17 @@ system_payload="$(find_one system.sfs || true)"
 cp -f "$kernel" "$RUNTIME/android/kernel"
 cp -f "$initrd" "$RUNTIME/android/initrd.img"
 
-# Source disk contains only immutable Android boot/system payload. Give it a
-# measured margin instead of a multi-gigabyte arbitrary fixed allocation.
+# The immutable system disk only contains Android's already-compressed system.sfs
+# (or system.img) plus optional ramdisk. It is always attached read-only by Jawal,
+# so an ext4 journal provides no recovery value. Omitting it saves metadata and
+# boot I/O without changing Android APIs, codecs or application behavior.
 payload_bytes="$(stat -c '%s' "$system_payload")"
 [[ -z "$ramdisk" ]] || payload_bytes=$((payload_bytes + $(stat -c '%s' "$ramdisk")))
-margin_bytes=$((256 * 1024 * 1024))
+margin_bytes=$((128 * 1024 * 1024))
 system_mib=$(( (payload_bytes + margin_bytes + 1048575) / 1048576 ))
 truncate -s "${system_mib}M" "$work/system.raw"
-mkfs.ext4 -q -F -L JAWALSYSTEM -m 0 -E lazy_itable_init=1,lazy_journal_init=1 "$work/system.raw"
+mkfs.ext4 -q -F -L JAWALSYSTEM -m 0 -O ^has_journal \
+  -E lazy_itable_init=1 "$work/system.raw"
 "${ROOTCMD[@]}" mount -o loop "$work/system.raw" "$work/system-mnt"
 "${ROOTCMD[@]}" mkdir -p "$work/system-mnt/AndroidOS"
 "${ROOTCMD[@]}" cp -f "$system_payload" "$work/system-mnt/AndroidOS/$(basename "$system_payload")"
@@ -62,11 +65,16 @@ fi
 sync
 "${ROOTCMD[@]}" umount "$work/system-mnt"
 
-qemu-img convert -c -p -f raw -O qcow2 "$work/system.raw" "$RUNTIME/images/jawal-system.qcow2"
+# Do not double-compress the read-only system disk. system.sfs is already
+# compressed; QCOW2 cluster compression adds CPU/decompression work for almost no
+# useful reduction. Sparse conversion still omits the free ext4 margin.
+qemu-img convert -p -S 4k -f raw -O qcow2 \
+  "$work/system.raw" "$RUNTIME/images/jawal-system.qcow2"
 
 # Empty ext4 data template. The apparent capacity is intentionally phone-like
-# (128 GiB by default), but qcow2 stores only allocated blocks. A clean install
-# therefore stays tiny and grows only as the user installs apps and stores data.
+# (128 GiB by default), but qcow2 stores only allocated blocks. Keep journaling on
+# user data for crash resilience. Compressing this one-time empty template only
+# affects its tiny initial metadata; normal future guest writes are not converted.
 truncate -s "${DATA_GIB}G" "$work/data.raw"
 mkfs.ext4 -q -F -L JAWALDATA -m 0 -E lazy_itable_init=1,lazy_journal_init=1 "$work/data.raw"
 qemu-img convert -c -p -f raw -O qcow2 "$work/data.raw" "$RUNTIME/images/jawal-data-template.qcow2"
@@ -76,6 +84,32 @@ qemu-img convert -c -p -f raw -O qcow2 "$work/data.raw" "$RUNTIME/images/jawal-d
   sha256sum android/kernel android/initrd.img images/jawal-system.qcow2 images/jawal-data-template.qcow2 > runtime.sha256
 )
 
+payload_size="$(stat -c '%s' "$system_payload")"
+system_qcow_size="$(stat -c '%s' "$RUNTIME/images/jawal-system.qcow2")"
+data_qcow_size="$(stat -c '%s' "$RUNTIME/images/jawal-data-template.qcow2")"
+kernel_size="$(stat -c '%s' "$RUNTIME/android/kernel")"
+initrd_size="$(stat -c '%s' "$RUNTIME/android/initrd.img")"
+python3 - "$RUNTIME/reports/android-runtime-size.json" \
+  "$payload_size" "$system_qcow_size" "$data_qcow_size" "$kernel_size" "$initrd_size" "$DATA_GIB" <<'PY'
+import json, sys
+out, payload, system_qcow, data_qcow, kernel, initrd, data_gib = sys.argv[1:]
+values = {
+    "systemPayloadBytes": int(payload),
+    "systemQcow2Bytes": int(system_qcow),
+    "dataTemplateQcow2Bytes": int(data_qcow),
+    "kernelBytes": int(kernel),
+    "initrdBytes": int(initrd),
+    "apparentDataGiB": int(data_gib),
+    "systemExt4Journal": False,
+    "systemQcow2Compression": False,
+    "dataTemplateQcow2Compression": True,
+}
+values["initialRuntimeBytes"] = values["systemQcow2Bytes"] + values["dataTemplateQcow2Bytes"] + values["kernelBytes"] + values["initrdBytes"]
+with open(out, "w", encoding="utf-8") as f:
+    json.dump(values, f, indent=2)
+PY
+
 printf 'Jawal Android runtime packaged (data capacity: %s GiB):\n' "$DATA_GIB"
 du -h "$RUNTIME/android/kernel" "$RUNTIME/android/initrd.img" \
       "$RUNTIME/images/jawal-system.qcow2" "$RUNTIME/images/jawal-data-template.qcow2"
+printf 'Runtime size report: %s\n' "$RUNTIME/reports/android-runtime-size.json"
