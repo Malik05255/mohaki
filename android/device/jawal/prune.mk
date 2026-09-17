@@ -136,6 +136,7 @@ JAWAL_REMOVE_PACKAGES := \
     android.hardware.bluetooth@1.0-impl \
     android.hardware.bluetooth.audio-impl \
     audio.bluetooth.default \
+    audio.a2dp.default \
     com.android.btservices \
     BluetoothMidiService \
     rfkill \
@@ -199,6 +200,9 @@ JAWAL_REMOVE_PACKAGES := \
     tput \
     dialog \
     alsa-info.sh \
+    alsa_aplay \
+    audio.primary.hdmi \
+    audio.usb.default \
     tree \
     lspci \
     dmidecode \
