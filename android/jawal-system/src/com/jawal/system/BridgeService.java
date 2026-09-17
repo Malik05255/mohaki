@@ -26,10 +26,12 @@ import android.webkit.WebView;
 
 import java.io.BufferedInputStream;
 import java.io.BufferedOutputStream;
+import java.io.BufferedReader;
 import java.io.BufferedWriter;
 import java.io.DataInputStream;
 import java.io.DataOutputStream;
 import java.io.IOException;
+import java.io.InputStreamReader;
 import java.io.OutputStream;
 import java.io.OutputStreamWriter;
 import java.net.InetAddress;
@@ -37,6 +39,7 @@ import java.net.ServerSocket;
 import java.net.Socket;
 import java.net.URLConnection;
 import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -50,9 +53,10 @@ public final class BridgeService extends Service {
     private static final int HEALTH_PORT = 27184;
     private static final int FILE_PORT = 27188;
     private static final int PACKAGE_MAGIC = 0x4A41504B; // JAPK
-    private static final int PACKAGE_PROTOCOL_VERSION = 2;
+    private static final int PACKAGE_PROTOCOL_VERSION = 3;
     private static final int FILE_MAGIC = 0x4A46494C; // JFIL
-    private static final int FILE_PROTOCOL_VERSION = 1;
+    private static final int FILE_PROTOCOL_VERSION = 2;
+    private static final int SESSION_TOKEN_CHARS = 64;
     private static final long MAX_TRANSFER_BYTES = 16L * 1024L * 1024L * 1024L;
 
     private final ExecutorService acceptExecutor = Executors.newSingleThreadExecutor();
@@ -80,6 +84,35 @@ public final class BridgeService extends Service {
         acceptExecutor.execute(this::servePackages);
         healthExecutor.execute(this::serveHealth);
         fileAcceptExecutor.execute(this::serveFiles);
+    }
+
+    private String expectedSessionToken() {
+        return SystemProperties.get("ro.boot.jawal_session", "");
+    }
+
+    private static boolean validSessionToken(String value) {
+        if (value == null || value.length() != SESSION_TOKEN_CHARS) return false;
+        for (int i = 0; i < value.length(); ++i) {
+            if (Character.digit(value.charAt(i), 16) < 0) return false;
+        }
+        return true;
+    }
+
+    private boolean sessionAuthorized(String candidate) {
+        final String expected = expectedSessionToken();
+        if (!validSessionToken(expected) || !validSessionToken(candidate)) return false;
+        return MessageDigest.isEqual(
+                expected.getBytes(StandardCharsets.US_ASCII),
+                candidate.getBytes(StandardCharsets.US_ASCII));
+    }
+
+    private String readSessionToken(DataInputStream input) throws IOException {
+        final int length = input.readInt();
+        if (length != SESSION_TOKEN_CHARS) return null;
+        final byte[] bytes = new byte[length];
+        input.readFully(bytes);
+        final String token = new String(bytes, StandardCharsets.US_ASCII);
+        return validSessionToken(token) ? token : null;
     }
 
     private void servePackages() {
@@ -123,8 +156,24 @@ public final class BridgeService extends Service {
                         Log.w(TAG, "Rejected health probe from " + source);
                         continue;
                     }
+
+                    final BufferedReader reader = new BufferedReader(
+                            new InputStreamReader(client.getInputStream(), StandardCharsets.UTF_8));
                     final BufferedWriter writer = new BufferedWriter(
                             new OutputStreamWriter(client.getOutputStream(), StandardCharsets.UTF_8));
+                    final String auth = reader.readLine();
+                    final String prefix = "AUTH ";
+                    final String token = auth != null && auth.startsWith(prefix)
+                            ? auth.substring(prefix.length()).trim()
+                            : "";
+                    if (!sessionAuthorized(token)) {
+                        Log.w(TAG, "Rejected unauthenticated health probe");
+                        writer.write("ERR AUTH");
+                        writer.newLine();
+                        writer.flush();
+                        continue;
+                    }
+
                     writer.write(buildHealthJson());
                     writer.newLine();
                     writer.flush();
@@ -248,6 +297,12 @@ public final class BridgeService extends Service {
                 writeInstallReply(output, -11, "");
                 return;
             }
+            final String token = readSessionToken(input);
+            if (!sessionAuthorized(token)) {
+                Log.w(TAG, "Rejected unauthenticated package bridge request");
+                writeInstallReply(output, -13, "");
+                return;
+            }
 
             final long length = input.readLong();
             if (length <= 0 || length > MAX_TRANSFER_BYTES) {
@@ -353,6 +408,12 @@ public final class BridgeService extends Service {
             if (input.readInt() != FILE_MAGIC || input.readInt() != FILE_PROTOCOL_VERSION) {
                 output.writeInt(-21); output.flush(); return;
             }
+            final String token = readSessionToken(input);
+            if (!sessionAuthorized(token)) {
+                Log.w(TAG, "Rejected unauthenticated file bridge request");
+                output.writeInt(-25); output.flush(); return;
+            }
+
             final int nameLength = input.readInt();
             final long length = input.readLong();
             if (nameLength <= 0 || nameLength > 1024 || length <= 0 || length > MAX_TRANSFER_BYTES) {
