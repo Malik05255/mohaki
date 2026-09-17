@@ -61,8 +61,11 @@ jobs:
           du -h dist/android/jawal-android.iso dist/android-runtime/images/*.qcow2 >> "$GITHUB_STEP_SUMMARY"
           echo "" >> "$GITHUB_STEP_SUMMARY"
           cat dist/android/size-analysis.md >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "## Measured pruning plan" >> "$GITHUB_STEP_SUMMARY"
+          cat dist/android/pruning-plan.md >> "$GITHUB_STEP_SUMMARY"
 
-      - name: Upload JawalOS runtime
+      - name: Upload JawalOS runtime and pruning evidence
         uses: actions/upload-artifact@v4
         with:
           name: jawalos-runtime
@@ -73,12 +76,20 @@ jobs:
             dist/android/JawalSmokeApp.apk
             dist/android/JawalArm64Smoke.apk
             dist/android/validation.txt
+            dist/android/hardware-pruning.txt
             dist/android/largest-files.tsv
             dist/android/product-files.tsv
             dist/android/size-analysis.json
             dist/android/size-analysis.md
+            dist/android/pruning-plan.md
             dist/android/build-metadata.txt
             dist/android/image-size.txt
+
+      - name: Stage 2 - enforce measured pruning budget before packaging
+        run: |
+          python3 tools/enforce-pruning-budget.py dist/android/size-analysis.json \
+            --max-tier-a-total-mib 12 \
+            --max-tier-a-file-mib 4
 
   stage-3-package:
     name: "3 Assemble Windows runtime + JawalSetup"
