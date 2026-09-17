@@ -58,14 +58,14 @@ def main() -> int:
         (
             board,
             "BOARD_MESA3D_GALLIUM_DRIVERS := crocus iris i915 nouveau r600 radeonsi svga virgl zink softpipe llvmpipe",
-            "BOARD_MESA3D_GALLIUM_DRIVERS := virgl zink softpipe llvmpipe",
-            "drop physical Mesa Gallium GPU families",
+            "BOARD_MESA3D_GALLIUM_DRIVERS := virgl zink",
+            "drop physical and software Gallium renderers; Jawal requires accelerated virtual GPU",
         ),
         (
             board,
             "BOARD_MESA3D_VULKAN_DRIVERS := amd intel intel_hasvk virtio swrast nouveau",
-            "BOARD_MESA3D_VULKAN_DRIVERS := virtio swrast",
-            "drop physical Vulkan GPU families",
+            "BOARD_MESA3D_VULKAN_DRIVERS := virtio",
+            "drop physical and software Vulkan renderers; keep Virtio Vulkan only",
         ),
         (board, "BOARD_USE_LIBVA_INTEL_DRIVER := true", "BOARD_USE_LIBVA_INTEL_DRIVER := false", "disable Intel VA driver under Virtio GPU"),
         (board, "BOARD_USES_MINIGBM_INTEL := true", "BOARD_USES_MINIGBM_INTEL := false", "disable Intel-only minigbm backend"),
