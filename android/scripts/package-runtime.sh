@@ -35,12 +35,15 @@ find_one() {
 kernel="$(find_one kernel)"
 initrd="$(find_one initrd.img)"
 ramdisk="$(find_one ramdisk.img || true)"
-system_payload="$(find_one system.sfs || true)"
+# BlissOS voyager-x86-qpr2 uses EROFS and names the compressed Android system
+# payload system.efs. Older/fallback Android-x86 builds may still emit sfs/img.
+system_payload="$(find_one system.efs || true)"
+[[ -n "$system_payload" ]] || system_payload="$(find_one system.sfs || true)"
 [[ -n "$system_payload" ]] || system_payload="$(find_one system.img || true)"
 
 [[ -f "$kernel" ]] || { echo "kernel missing from Android image" >&2; exit 3; }
 [[ -f "$initrd" ]] || { echo "initrd.img missing from Android image" >&2; exit 3; }
-[[ -f "$system_payload" ]] || { echo "system.sfs/system.img missing from Android image" >&2; exit 3; }
+[[ -f "$system_payload" ]] || { echo "system.efs/system.sfs/system.img missing from Android image" >&2; exit 3; }
 
 cp -f "$kernel" "$RUNTIME/android/kernel"
 cp -f "$initrd" "$RUNTIME/android/initrd.img"
@@ -55,16 +58,19 @@ for report in \
   size-analysis.md \
   pruning-plan.md \
   build-metadata.txt \
-  image-size.txt; do
+  image-size.txt \
+  hardware-pruning.txt \
+  kernel-profile.txt \
+  kernel-modules.tsv; do
   if [[ -f "$SOURCE_REPORT_DIR/$report" ]]; then
     cp -f "$SOURCE_REPORT_DIR/$report" "$RUNTIME/reports/$report"
   fi
 done
 
-# The immutable system disk only contains Android's already-compressed system.sfs
-# (or system.img) plus optional ramdisk. It is always attached read-only by Jawal,
-# so an ext4 journal provides no recovery value. Omitting it saves metadata and
-# boot I/O without changing Android APIs, codecs or application behavior.
+# The immutable system disk only contains Android's already-compressed EROFS,
+# SquashFS or fallback system image plus optional ramdisk. It is always attached
+# read-only by Jawal, so an ext4 journal provides no recovery value. Omitting it
+# saves metadata and boot I/O without changing Android APIs/codecs/app behavior.
 payload_bytes="$(stat -c '%s' "$system_payload")"
 [[ -z "$ramdisk" ]] || payload_bytes=$((payload_bytes + $(stat -c '%s' "$ramdisk")))
 margin_bytes=$((128 * 1024 * 1024))
@@ -82,9 +88,8 @@ fi
 sync
 "${ROOTCMD[@]}" umount "$work/system-mnt"
 
-# Do not double-compress the read-only system disk. system.sfs is already
-# compressed; QCOW2 cluster compression adds CPU/decompression work for almost no
-# useful reduction. Sparse conversion still omits the free ext4 margin.
+# Do not double-compress the read-only system disk. system.efs/system.sfs is
+# already compressed; QCOW2 cluster compression adds CPU work for little gain.
 qemu-img convert -p -S 4k -f raw -O qcow2 \
   "$work/system.raw" "$RUNTIME/images/jawal-system.qcow2"
 
@@ -106,11 +111,13 @@ system_qcow_size="$(stat -c '%s' "$RUNTIME/images/jawal-system.qcow2")"
 data_qcow_size="$(stat -c '%s' "$RUNTIME/images/jawal-data-template.qcow2")"
 kernel_size="$(stat -c '%s' "$RUNTIME/android/kernel")"
 initrd_size="$(stat -c '%s' "$RUNTIME/android/initrd.img")"
+payload_name="$(basename "$system_payload")"
 python3 - "$RUNTIME/reports/android-runtime-size.json" \
-  "$payload_size" "$system_qcow_size" "$data_qcow_size" "$kernel_size" "$initrd_size" "$DATA_GIB" <<'PY'
+  "$payload_size" "$system_qcow_size" "$data_qcow_size" "$kernel_size" "$initrd_size" "$DATA_GIB" "$payload_name" <<'PY'
 import json, sys
-out, payload, system_qcow, data_qcow, kernel, initrd, data_gib = sys.argv[1:]
+out, payload, system_qcow, data_qcow, kernel, initrd, data_gib, payload_name = sys.argv[1:]
 values = {
+    "systemPayloadName": payload_name,
     "systemPayloadBytes": int(payload),
     "systemQcow2Bytes": int(system_qcow),
     "dataTemplateQcow2Bytes": int(data_qcow),
@@ -126,7 +133,7 @@ with open(out, "w", encoding="utf-8") as f:
     json.dump(values, f, indent=2)
 PY
 
-printf 'Jawal Android runtime packaged (data capacity: %s GiB):\n' "$DATA_GIB"
+printf 'Jawal Android runtime packaged (payload: %s, data capacity: %s GiB):\n' "$payload_name" "$DATA_GIB"
 du -h "$RUNTIME/android/kernel" "$RUNTIME/android/initrd.img" \
       "$RUNTIME/images/jawal-system.qcow2" "$RUNTIME/images/jawal-data-template.qcow2"
 printf 'Runtime size report: %s\n' "$RUNTIME/reports/android-runtime-size.json"
