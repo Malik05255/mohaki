@@ -42,6 +42,7 @@ BANNED_FILES=(
   '*/bin/thermal-daemon' '*/bin/hcitool' '*/bin/simpleperf' '*/bin/strace'
   '*/bin/virtualizationservice' '*/bin/vm' '*/bin/vm_shell'
   '*/bin/fastboot' '*/bin/lpdump' '*/bin/lpmake' '*/bin/lpadd' '*/bin/lpflash'
+  '*/bin/update_engine' '*/bin/update_verifier' '*/bin/snapshotctl'
   '*/bin/bootanimation'
   '*/bin/wpa_supplicant' '*/bin/hostapd' '*/bin/wpa_cli'
   '*/bin/hw/android.hardware.camera.provider.ranchu'
@@ -60,6 +61,16 @@ for pattern in "${BANNED_FILES[@]}"; do
     fail "Unused bare-metal/hardware/visual file still present: $pattern"
   else
     pass "Removed unused bare-metal/hardware/visual file: $pattern"
+  fi
+done
+
+# Jawal never boots Android recovery or A/B update slots; lifecycle/update logic
+# lives in the Windows host around an immutable system disk and user-data qcow2.
+for dead_image in recovery.img ramdisk-recovery.img; do
+  if [[ -e "$PRODUCT_OUT/$dead_image" ]]; then
+    fail "Unused recovery artifact still produced: $dead_image"
+  else
+    pass "Recovery artifact disabled: $dead_image"
   fi
 done
 
