@@ -3,8 +3,9 @@
 
 The synced Bliss/Android-Generic source targets arbitrary physical PCs. Jawal is a
 fixed QEMU/WHPX virtual phone, so physical Bluetooth/GPS/sensor stacks, physical
-GPU driver families and their PC init paths are dead weight. Patches are exact
-and fail closed when upstream changes, preventing silent edits to unexpected source.
+GPU driver families, generic PC firmware and their init paths are dead weight.
+Patches are exact and fail closed when upstream changes, preventing silent edits
+to unexpected source.
 """
 from __future__ import annotations
 
@@ -42,6 +43,7 @@ def main() -> int:
     board = root / "device/generic/common/BoardConfig.mk"
     device = root / "device/generic/common/device.mk"
     init_sh = root / "device/generic/common/init.sh"
+    kernel_task = root / "device/generic/common/build/tasks/kernel.mk"
 
     replacements = [
         (board, "BOARD_HAVE_BLUETOOTH := true", "BOARD_HAVE_BLUETOOTH := false", "disable physical Bluetooth board support"),
@@ -80,6 +82,34 @@ def main() -> int:
             "$(call inherit-product-if-exists,hardware/libsensors/sensors.mk)",
             "# Jawal: physical sensor HAL inheritance intentionally omitted",
             "omit generic physical sensors product inheritance",
+        ),
+        # QEMU's virtio GPU/network/RNG, emulated HDA and xHCI/input devices do
+        # not consume Linux PC firmware blobs. Android-x86 otherwise copies the
+        # entire generic firmware catalogue (plus optional Silead/Intel SOF),
+        # which is pure dead weight in Jawal's fixed virtual hardware contract.
+        (
+            kernel_task,
+            "\t$(COPY_FIRMWARE_SCRIPT) --zstd -v $(FIRMWARE_DEST)\n",
+            "\t# Jawal: generic physical-PC firmware catalogue intentionally omitted\n",
+            "skip generic Linux PC firmware copy",
+        ),
+        (
+            kernel_task,
+            "\t$(if $(TARGET_HAS_SILEAD_FIRMWARE), $(COPY_FIRMWARE_SILEAD_SCRIPT) --zstd -v $(FIRMWARE_DEST))\n",
+            "\t# Jawal: Silead touchscreen firmware intentionally omitted\n",
+            "skip Silead touchscreen firmware",
+        ),
+        (
+            kernel_task,
+            "\t$(if $(TARGET_HAS_SOF_FIRMWARE), FW_DEST=$(FIRMWARE_DEST)/intel FW_LOCATION=$(SOF_FIRMWARE_DIR) $(COPY_FIRMWARE_SOF_SCRIPT) $(SOF_FIRMWARE_VERSION))\n",
+            "\t# Jawal: Intel SOF firmware intentionally omitted; guest audio is emulated HDA\n",
+            "skip Intel SOF physical-audio firmware",
+        ),
+        (
+            kernel_task,
+            "\t$(if $(FIRMWARE_ENABLED),$(mk_kernel) INSTALL_MOD_PATH=$(abspath $(TARGET_OUT)) firmware_install)\n",
+            "\t# Jawal: kernel firmware_install intentionally omitted for fixed QEMU hardware\n",
+            "skip kernel external firmware installation",
         ),
         (init_sh, "\tset_custom_ota\n", "\t# Jawal: Android-x86 OTA setup omitted\n", "skip Android-x86 OTA init"),
         (init_sh, "\tinit_hal_brcm_wifi\n", "\t# Jawal: physical Wi-Fi init omitted\n", "skip physical Wi-Fi init"),
