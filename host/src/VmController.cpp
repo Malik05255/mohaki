@@ -97,7 +97,8 @@ std::wstring VmController::BuildCommandLine(HWND, const VmConfig& c) const {
 
     cmd << L" -kernel " << Quote(kernel)
         << L" -initrd " << Quote(initrd)
-        << L" -append \"root=/dev/ram0 SRC=/AndroidOS DATA=/dev/vdb HWC=drm_minigbm GRALLOC=minigbm_arcvm FFMPEG_CODEC2_PREFER=1 "
+        << L" -append \"root=/dev/ram0 SRC=/AndroidOS DATA=/dev/vdb HWC=drm_minigbm GRALLOC=minigbm_arcvm FFMPEG_CODEC2_PREFER=1 DPI="
+        << c.displayDensityDpi << L" "
         << video.str() << L" quiet\""
         << L" -device virtio-vga-gl"
         << L" -display sdl,gl=on,window-close=off"
