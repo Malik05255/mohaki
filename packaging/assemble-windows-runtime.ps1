@@ -48,8 +48,8 @@ Copy-Item $qemuImg (Join-Path $output "qemu\qemu-img.exe") -Force
 
 # Do not ship every DLL from a full QEMU distribution. Compute the recursive PE
 # import closure for qemu-system-x86_64.exe + qemu-img.exe and copy only local
-# dependencies that those binaries really reference. This keeps the runtime
-# portable across QEMU builds without hard-coding a brittle DLL allowlist.
+# dependencies that those binaries really reference. Strict mode prevents a
+# missing redistributable/QEMU DLL from being misclassified as a Windows DLL.
 $python = Get-Command python -ErrorAction SilentlyContinue
 if (-not $python) { $python = Get-Command python3 -ErrorAction SilentlyContinue }
 if (-not $python) {
@@ -58,10 +58,24 @@ if (-not $python) {
 $scanner = Join-Path $repoRoot "tools\pe-dependency-closure.py"
 Require-File $scanner "QEMU PE dependency scanner"
 $depReport = Join-Path $output "reports\qemu-dependencies.json"
-$dllNames = & $python.Source $scanner $qemuRoot `
-    "qemu-system-x86_64.exe" "qemu-img.exe" --json $depReport
+$scannerArgs = @(
+    $scanner,
+    $qemuRoot,
+    "qemu-system-x86_64.exe",
+    "qemu-img.exe",
+    "--json",
+    $depReport,
+    "--strict-local"
+)
+if ($env:SystemRoot) {
+    $system32 = Join-Path $env:SystemRoot "System32"
+    if (Test-Path -LiteralPath $system32 -PathType Container) {
+        $scannerArgs += @("--system-dir", $system32)
+    }
+}
+$dllNames = & $python.Source @scannerArgs
 if ($LASTEXITCODE -ne 0) {
-    throw "Failed to compute QEMU DLL dependency closure."
+    throw "Failed to compute a complete QEMU DLL dependency closure. See $depReport"
 }
 foreach ($dllName in ($dllNames | Where-Object { $_ -and $_.Trim() } | Sort-Object -Unique)) {
     $source = Join-Path $qemuRoot $dllName.Trim()
