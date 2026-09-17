@@ -59,6 +59,18 @@ bool ConvertImage(const std::filesystem::path& runtimeDir,
     return RunHiddenAndWait(command, runtimeDir);
 }
 
+void MarkStandaloneData(const std::filesystem::path& dataDirectory) {
+    const auto marker = dataDirectory / L"data-independent-v1.marker";
+    std::ofstream output(marker, std::ios::trunc);
+    if (output) output << "standalone-qcow2-v1\n";
+    output.close();
+
+    std::error_code ec;
+    std::filesystem::remove(dataDirectory / L"data.qcow2.creating", ec);
+    ec.clear();
+    std::filesystem::remove(dataDirectory / L"data.qcow2.pre-standalone", ec);
+}
+
 std::filesystem::path TimestampedBackup(const std::filesystem::path& backupDir) {
     SYSTEMTIME t{};
     GetLocalTime(&t);
@@ -164,6 +176,8 @@ MaintenanceResult RestoreLatestDataBackup(const std::filesystem::path& runtimeDi
     std::error_code ec;
     std::filesystem::remove(temporary, ec);
 
+    // qemu-img convert always materializes a self-contained destination, even
+    // if a historical backup originated from an old backing-file data chain.
     if (!ConvertImage(runtimeDir, backup, temporary, false) || !CheckImage(runtimeDir, temporary)) {
         std::filesystem::remove(temporary, ec);
         result.detail = L"تعذر تجهيز بيانات النسخة الاحتياطية للاستعادة.";
@@ -176,6 +190,7 @@ MaintenanceResult RestoreLatestDataBackup(const std::filesystem::path& runtimeDi
         result.detail = replaceError;
         return result;
     }
+    MarkStandaloneData(dataDirectory);
 
     result.ok = true;
     result.artifact = backup;
@@ -207,6 +222,7 @@ MaintenanceResult CheckAndCompactData(const std::filesystem::path& runtimeDir,
         result.detail = replaceError;
         return result;
     }
+    MarkStandaloneData(dataDirectory);
 
     result.ok = true;
     result.artifact = target;
