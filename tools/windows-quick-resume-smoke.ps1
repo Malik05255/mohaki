@@ -62,13 +62,23 @@ function Assert-StandaloneData {
     return $info
 }
 
+function Assert-V2Marker {
+    if (-not (Test-Path -LiteralPath $marker -PathType Leaf)) {
+        throw "Quick-resume marker is missing."
+    }
+    $lines = @(Get-Content -LiteralPath $marker)
+    if ($lines.Count -lt 2 -or $lines[0] -ne 'jawal_quick_resume_v2' -or
+        $lines[1] -notmatch '^runtime=[0-9a-f]{64}$') {
+        throw "Quick-resume marker is not bound to a runtime SHA-256 fingerprint."
+    }
+    return $lines[1].Substring('runtime='.Length)
+}
+
 $first = Start-And-WaitReady -Exe $jawal -Timeout $TimeoutSeconds
 $coldReadyMs = $first.ElapsedMs
 Close-Gracefully $first.Process
 
-if (-not (Test-Path -LiteralPath $marker -PathType Leaf)) {
-    throw "Quick-resume marker was not created after graceful close."
-}
+$firstFingerprint = Assert-V2Marker
 $null = Assert-StandaloneData
 
 $snapshotOutput = & $qemuImg snapshot -l $dataDisk 2>&1 | Out-String
@@ -81,15 +91,15 @@ $markerBeforeResumeUtc = (Get-Item -LiteralPath $marker).LastWriteTimeUtc
 $second = Start-And-WaitReady -Exe $jawal -Timeout $TimeoutSeconds
 $resumeReadyMs = $second.ElapsedMs
 try {
-    # VmController deletes this marker only when -loadvm fails and it retries a
-    # cold boot. Check it while Android is running, before graceful shutdown can
-    # create a fresh marker and accidentally hide a failed resume.
+    # VmController deletes this marker only when -loadvm fails or when the marker
+    # does not match the current runtime. Check while Android is running, before
+    # graceful shutdown can write a replacement marker.
     if (-not (Test-Path -LiteralPath $marker -PathType Leaf)) {
         throw "Quick Resume fell back to a cold boot; the resume marker was invalidated during startup."
     }
     $markerDuringResumeUtc = (Get-Item -LiteralPath $marker).LastWriteTimeUtc
     if ($markerDuringResumeUtc -ne $markerBeforeResumeUtc) {
-        throw "Quick-resume marker changed during startup; expected the existing snapshot marker to be consumed without replacement."
+        throw "Quick-resume marker changed during startup; expected the existing snapshot marker to remain unchanged."
     }
     $null = Assert-StandaloneData
 }
@@ -97,8 +107,9 @@ finally {
     Close-Gracefully $second.Process
 }
 
-if (-not (Test-Path -LiteralPath $marker -PathType Leaf)) {
-    throw "Quick-resume marker was not refreshed after the resumed session closed."
+$secondFingerprint = Assert-V2Marker
+if ($secondFingerprint -ne $firstFingerprint) {
+    throw "Runtime fingerprint changed without a runtime update during the same Stage 4 test."
 }
 $null = Assert-StandaloneData
 
@@ -107,18 +118,48 @@ if ($LASTEXITCODE -ne 0 -or $snapshotAfterOutput -notmatch 'jawal_quick_resume')
     throw "Quick-resume snapshot disappeared after the resumed session was saved again."
 }
 
+# Corrupt only the authorization fingerprint, not the VM snapshot or runtime.
+# Jawal must reject this marker before asking QEMU to load the incompatible state.
+@(
+    'jawal_quick_resume_v2',
+    ('runtime=' + ('0' * 64))
+) | Set-Content -LiteralPath $marker -Encoding ascii
+
+$third = Start-And-WaitReady -Exe $jawal -Timeout $TimeoutSeconds
+$runtimeMismatchColdReadyMs = $third.ElapsedMs
+try {
+    if (Test-Path -LiteralPath $marker -PathType Leaf) {
+        throw "Jawal did not invalidate a quick-resume marker from a different runtime fingerprint."
+    }
+    $null = Assert-StandaloneData
+}
+finally {
+    Close-Gracefully $third.Process
+}
+
+$recoveredFingerprint = Assert-V2Marker
+if ($recoveredFingerprint -ne $firstFingerprint) {
+    throw "Cold boot after runtime mismatch did not write the current runtime fingerprint."
+}
+
 [ordered]@{
     passed = $true
     snapshotPresentBeforeResume = $true
     resumeUsedWithoutColdFallback = $true
     snapshotPresentAfterResume = $true
+    runtimeFingerprintBoundMarker = $true
+    mismatchedRuntimeMarkerRejected = $true
+    freshMarkerWrittenAfterColdFallback = $true
     dataRemainedStandalone = $true
     markerPresent = (Test-Path -LiteralPath $marker -PathType Leaf)
+    runtimeFingerprint = $recoveredFingerprint
     coldReadyMs = $coldReadyMs
     resumeReadyMs = $resumeReadyMs
+    runtimeMismatchColdReadyMs = $runtimeMismatchColdReadyMs
     resumedAndroid = $second.Health
+    coldAfterMismatchAndroid = $third.Health
     completedAtUtc = [DateTime]::UtcNow.ToString("o")
 } | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath $report -Encoding UTF8
 
-Write-Host "PASS: quick-resume snapshot loaded without cold fallback and user data remained standalone."
-Write-Host "Cold ready: ${coldReadyMs}ms; resume ready: ${resumeReadyMs}ms"
+Write-Host "PASS: quick-resume uses matching runtime state and rejects stale snapshots after runtime changes."
+Write-Host "Cold: ${coldReadyMs}ms; resume: ${resumeReadyMs}ms; mismatch cold boot: ${runtimeMismatchColdReadyMs}ms"
