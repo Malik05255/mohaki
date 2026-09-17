@@ -35,6 +35,7 @@ SAFE_HINT_TOKENS = (
     "microdroid", "virtualizationservice", "/vm_shell", "/vm",
     "gnss-service.ranchu", "sensors@2.1-impl.ranchu", "wpa_supplicant",
     "hostapd", "bt_vhci", "mac80211", "bluetooth-service.default",
+    "bootanimation", "bugreport", "dumpstate", "perfetto", "incidentd",
 )
 
 REVIEW_HINT_TOKENS = (
@@ -65,6 +66,12 @@ def main() -> int:
     parser.add_argument("--markdown", default="dist/android/size-analysis.md")
     parser.add_argument("--plan", default="dist/android/pruning-plan.md")
     parser.add_argument("--top", type=int, default=100)
+    parser.add_argument(
+        "--measured-pruning-threshold-mib",
+        type=float,
+        default=10.0,
+        help="Mark the build for another measured pruning pass when Tier A candidates exceed this total.",
+    )
     args = parser.parse_args()
 
     rows = []
@@ -117,6 +124,11 @@ def main() -> int:
         elif risk == "protected" and len(protected) < 100:
             protected.append(item)
 
+    safe_bytes = risk_bytes["safe_candidate"]
+    review_bytes = risk_bytes["review_candidate"]
+    top_safe_bytes = max((size for size, path in rows if classify(path) == "safe_candidate"), default=0)
+    measured_pruning_required = mib(safe_bytes) >= args.measured_pruning_threshold_mib
+
     result = {
         "totalProductFilesMiB": mib(sum(size for size, _ in rows)),
         "fileCount": len(rows),
@@ -126,6 +138,13 @@ def main() -> int:
         "safeReviewCandidates": safe,
         "dependencyReviewCandidates": review,
         "protectedLargeFiles": protected,
+        "measuredPruning": {
+            "tierATotalMiB": mib(safe_bytes),
+            "tierBTotalMiB": mib(review_bytes),
+            "largestTierAFileMiB": mib(top_safe_bytes),
+            "thresholdMiB": args.measured_pruning_threshold_mib,
+            "anotherPassRecommended": measured_pruning_required,
+        },
         "policy": {
             "safe_candidate": "Review first; removable only if product validator and boot/app matrix stay green.",
             "review_candidate": "Do not remove without explicit dependency/app evidence.",
@@ -142,6 +161,13 @@ def main() -> int:
         "# JawalOS size analysis",
         "",
         f"Total product files: **{result['totalProductFilesMiB']} MiB** across **{len(rows)} files**.",
+        "",
+        "## Measured pruning opportunity",
+        "",
+        f"- Tier A total: **{result['measuredPruning']['tierATotalMiB']} MiB**",
+        f"- Largest Tier A file: **{result['measuredPruning']['largestTierAFileMiB']} MiB**",
+        f"- Tier B total: **{result['measuredPruning']['tierBTotalMiB']} MiB**",
+        f"- Another measured pass recommended: **{'yes' if measured_pruning_required else 'no'}**",
         "",
         "## Largest categories",
         "",
@@ -167,6 +193,9 @@ def main() -> int:
         "",
         "Generated after a real Android build. Never delete protected entries for size.",
         "",
+        f"Tier A measured total: **{result['measuredPruning']['tierATotalMiB']} MiB**. ",
+        f"Another measured pass recommended: **{'yes' if measured_pruning_required else 'no'}**.",
+        "",
         "## Tier A — safest high-value review candidates",
         "",
         "| MiB | Path |",
@@ -180,6 +209,8 @@ def main() -> int:
     plan.write_text("\n".join(plan_lines) + "\n", encoding="utf-8")
 
     print(f"JawalOS size analysis: {result['totalProductFilesMiB']} MiB, {len(rows)} files")
+    print(f"Tier A measured opportunity: {result['measuredPruning']['tierATotalMiB']} MiB")
+    print(f"Another measured pruning pass recommended: {'yes' if measured_pruning_required else 'no'}")
     print(f"JSON: {output}")
     print(f"Markdown: {md}")
     print(f"Pruning plan: {plan}")
