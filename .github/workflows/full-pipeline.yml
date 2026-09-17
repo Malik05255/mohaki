@@ -9,6 +9,17 @@ on:
         default: "none"
         type: choice
         options: [none, libndk]
+      services_variant:
+        description: "Android services: vanilla is production default; microg requires a compatible vendor tree"
+        required: true
+        default: "vanilla"
+        type: choice
+        options: [vanilla, microg]
+      microg_vendor_dir:
+        description: "Optional QPR2-compatible vendor/microg directory on the Android builder (required for microg while upstream omits it)"
+        required: false
+        default: ""
+        type: string
       qemu_dir:
         description: "QEMU Windows runtime directory on the Windows builder"
         required: true
@@ -55,7 +66,8 @@ jobs:
         env:
           JAWAL_NATIVE_BRIDGE: ${{ inputs.native_bridge }}
           JAWAL_BUILD_TYPE: user
-          JAWAL_SERVICES_VARIANT: microg
+          JAWAL_SERVICES_VARIANT: ${{ inputs.services_variant }}
+          JAWAL_MICROG_VENDOR_DIR: ${{ inputs.microg_vendor_dir }}
           JAWAL_STRICT_SIZE: "1"
         run: android/scripts/sync-and-build.sh
 
