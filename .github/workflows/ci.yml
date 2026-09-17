@@ -78,6 +78,7 @@ jobs:
           bash -n tools/fetch-store.sh
           bash -n tools/validate-product.sh
           bash -n tools/validate-hardware-pruning.sh
+          bash -n tools/validate-kernel-profile.sh
           bash -n tools/build-arm64-smoke.sh
           python3 -m py_compile tools/analyze-jawalos-size.py
           python3 -m py_compile tools/enforce-pruning-budget.py
@@ -113,5 +114,42 @@ jobs:
           if python3 tools/enforce-pruning-budget.py build/pruning-gate/fail.json \
             --max-tier-a-total-mib 12 --max-tier-a-file-mib 4; then
             echo "Expected pruning gate to reject oversized Tier A candidates." >&2
+            exit 1
+          fi
+
+      - name: Exercise minimal kernel and firmware gate
+        run: |
+          product=build/kernel-gate/product
+          reports=build/kernel-gate/reports
+          mkdir -p "$product/obj/kernel" "$reports"
+          cat > "$product/obj/kernel/.config" <<'KCONFIG'
+          CONFIG_VIRTIO=y
+          CONFIG_VIRTIO_PCI=y
+          CONFIG_VIRTIO_NET=m
+          CONFIG_VIRTIO_BLK=m
+          CONFIG_DRM_VIRTIO_GPU=m
+          CONFIG_HW_RANDOM_VIRTIO=m
+          CONFIG_USB_XHCI_HCD=y
+          CONFIG_USB_HID=y
+          CONFIG_HID_GENERIC=y
+          CONFIG_INPUT_EVDEV=y
+          # CONFIG_BT is not set
+          # CONFIG_WLAN is not set
+          # CONFIG_CFG80211 is not set
+          # CONFIG_MAC80211 is not set
+          # CONFIG_NFC is not set
+          # CONFIG_WWAN is not set
+          # CONFIG_DRM_I915 is not set
+          # CONFIG_DRM_AMDGPU is not set
+          # CONFIG_DRM_NOUVEAU is not set
+          # CONFIG_NET_VENDOR_INTEL is not set
+          # CONFIG_NET_VENDOR_REALTEK is not set
+          KCONFIG
+          bash tools/validate-kernel-profile.sh "$product" "$reports"
+
+          mkdir -p "$product/vendor/firmware/intel"
+          printf 'dead-weight' > "$product/vendor/firmware/intel/physical.bin"
+          if bash tools/validate-kernel-profile.sh "$product" "$reports"; then
+            echo "Expected kernel gate to reject physical firmware leakage." >&2
             exit 1
           fi
