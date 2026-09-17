@@ -2,9 +2,10 @@
 """Remove Android-x86 product machinery Jawal never uses.
 
 Jawal updates its immutable Android runtime from the Windows host and recreates
-user data separately. Android A/B OTA, recovery and update-engine packages are
-therefore build-time dead weight. Edits are exact and fail closed when BlissOS
-changes its product file so an upstream update cannot silently reintroduce them.
+user data separately. Android A/B OTA, recovery and physical-PC calibration
+components are therefore build-time dead weight. Edits are exact and fail closed
+when BlissOS changes its product file so upstream updates cannot silently
+reintroduce them.
 """
 from __future__ import annotations
 
@@ -74,6 +75,11 @@ def main() -> int:
             "# Jawal: recovery copy-file block omitted; runtime is serviced by Windows host\n",
             "remove recovery copy-file block",
         ),
+        (
+            "$(call inherit-product-if-exists,external/tslib/tslib.mk)",
+            "# Jawal: physical touchscreen calibration stack omitted; QEMU usb-tablet is calibrated input",
+            "remove physical touchscreen calibration product",
+        ),
     ]
 
     try:
@@ -83,7 +89,7 @@ def main() -> int:
         print(f"FAIL {exc}")
         return 2
 
-    print("Jawal product OTA/recovery pruning complete.")
+    print("Jawal product OTA/recovery/physical-input pruning complete.")
     return 0
 
 
