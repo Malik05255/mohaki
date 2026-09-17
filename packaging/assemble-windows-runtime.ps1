@@ -38,6 +38,9 @@ New-Item (Join-Path $output "reports") -ItemType Directory | Out-Null
 
 Copy-Item (Join-Path $androidRoot "android") $output -Recurse
 Copy-Item (Join-Path $androidRoot "images") $output -Recurse
+if (Test-Path (Join-Path $androidRoot "reports")) {
+    Copy-Item (Join-Path $androidRoot "reports\*") (Join-Path $output "reports") -Force
+}
 
 # Copy only the two QEMU tools Jawal actually executes.
 Copy-Item $qemuExe (Join-Path $output "qemu\qemu-system-x86_64.exe") -Force
@@ -66,15 +69,29 @@ foreach ($dllName in ($dllNames | Where-Object { $_ -and $_.Trim() } | Sort-Obje
     Copy-Item $source (Join-Path $output "qemu\$($dllName.Trim())") -Force
 }
 
-# Firmware location varies between QEMU Windows distributions.
+# The minimized QEMU bundle must still contain deterministic PC firmware.
+# Do not rely on a machine-wide QEMU installation at runtime.
 $firmwareCandidates = @(
     (Join-Path $qemuRoot "share\edk2-x86_64-code.fd"),
     (Join-Path $qemuRoot "share\qemu\edk2-x86_64-code.fd"),
     (Join-Path $qemuRoot "edk2-x86_64-code.fd")
 )
 $firmware = $firmwareCandidates | Where-Object { Test-Path -LiteralPath $_ -PathType Leaf } | Select-Object -First 1
-if ($firmware) {
-    Copy-Item $firmware (Join-Path $output "firmware\edk2-x86_64-code.fd") -Force
+if (-not $firmware) {
+    throw "QEMU x86_64 firmware edk2-x86_64-code.fd was not found. A minimal Jawal runtime must bundle its own firmware."
+}
+Copy-Item $firmware (Join-Path $output "firmware\edk2-x86_64-code.fd") -Force
+
+# Some QEMU distributions keep the virtio VGA option ROM as an external file.
+# It is tiny; include it when available rather than shipping the entire share tree.
+$virtioVgaCandidates = @(
+    (Join-Path $qemuRoot "share\vgabios-virtio.bin"),
+    (Join-Path $qemuRoot "share\qemu\vgabios-virtio.bin"),
+    (Join-Path $qemuRoot "vgabios-virtio.bin")
+)
+$virtioVgaRom = $virtioVgaCandidates | Where-Object { Test-Path -LiteralPath $_ -PathType Leaf } | Select-Object -First 1
+if ($virtioVgaRom) {
+    Copy-Item $virtioVgaRom (Join-Path $output "firmware\vgabios-virtio.bin") -Force
 }
 
 # Keep QEMU license material with the runtime when the binary distribution ships it.
@@ -90,6 +107,7 @@ foreach ($name in $licenseCandidates) {
 
 Require-File (Join-Path $output "qemu\qemu-system-x86_64.exe") "Packaged QEMU"
 Require-File (Join-Path $output "qemu\qemu-img.exe") "Packaged qemu-img"
+Require-File (Join-Path $output "firmware\edk2-x86_64-code.fd") "Packaged QEMU firmware"
 
 # Regenerate the manifest after Windows QEMU files are assembled. Jawal.exe
 # verifies this manifest on every launch before starting Android.
@@ -99,10 +117,11 @@ $critical = @(
     "images\jawal-system.qcow2",
     "images\jawal-data-template.qcow2",
     "qemu\qemu-system-x86_64.exe",
-    "qemu\qemu-img.exe"
+    "qemu\qemu-img.exe",
+    "firmware\edk2-x86_64-code.fd"
 )
-if (Test-Path (Join-Path $output "firmware\edk2-x86_64-code.fd")) {
-    $critical += "firmware\edk2-x86_64-code.fd"
+if (Test-Path (Join-Path $output "firmware\vgabios-virtio.bin")) {
+    $critical += "firmware\vgabios-virtio.bin"
 }
 $critical += @(Get-ChildItem (Join-Path $output "qemu") -Filter *.dll -File | ForEach-Object { "qemu\$($_.Name)" })
 
@@ -121,15 +140,21 @@ $sizeMiB = [Math]::Round($totalBytes / 1MB, 1)
 $qemuFiles = Get-ChildItem (Join-Path $output "qemu") -File
 $qemuBytes = ($qemuFiles | Measure-Object Length -Sum).Sum
 $qemuMiB = [Math]::Round($qemuBytes / 1MB, 1)
+$firmwareFiles = @(Get-ChildItem (Join-Path $output "firmware") -File)
+$firmwareBytes = ($firmwareFiles | Measure-Object Length -Sum).Sum
+$firmwareMiB = [Math]::Round($firmwareBytes / 1MB, 1)
 
 @{
     runtimeMiB = $sizeMiB
     qemuMiB = $qemuMiB
     qemuFileCount = $qemuFiles.Count
+    firmwareMiB = $firmwareMiB
+    firmwareFileCount = $firmwareFiles.Count
     integrityEntries = $lines.Count
 } | ConvertTo-Json | Set-Content (Join-Path $output "reports\runtime-size.json") -Encoding UTF8
 
 Write-Host "Jawal Windows runtime assembled: $sizeMiB MiB"
 Write-Host "Minimal QEMU payload: $qemuMiB MiB across $($qemuFiles.Count) files"
+Write-Host "Firmware payload: $firmwareMiB MiB across $($firmwareFiles.Count) files"
 Write-Host "Integrity manifest entries: $($lines.Count)"
 Write-Host $output
