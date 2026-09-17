@@ -23,7 +23,6 @@ def replace_exact(path: Path, old: str, new: str, label: str) -> None:
     text = path.read_text(encoding="utf-8")
     count = text.count(old)
     if count == 0:
-        # Idempotent rerun: accept an already-patched tree.
         if new in text:
             print(f"PASS already patched: {label}")
             return
@@ -31,6 +30,20 @@ def replace_exact(path: Path, old: str, new: str, label: str) -> None:
     if count != 1:
         raise PatchError(f"{label}: expected one source fragment, found {count} in {path}")
     path.write_text(text.replace(old, new, 1), encoding="utf-8")
+    print(f"PASS patched: {label}")
+
+
+def ensure_after(path: Path, marker: str, line: str, label: str) -> None:
+    if not path.is_file():
+        raise PatchError(f"{label}: missing file: {path}")
+    text = path.read_text(encoding="utf-8")
+    if line in text:
+        print(f"PASS already patched: {label}")
+        return
+    count = text.count(marker)
+    if count != 1:
+        raise PatchError(f"{label}: expected one marker, found {count} in {path}")
+    path.write_text(text.replace(marker, marker + "\n" + line, 1), encoding="utf-8")
     print(f"PASS patched: {label}")
 
 
@@ -83,10 +96,6 @@ def main() -> int:
             "# Jawal: physical sensor HAL inheritance intentionally omitted",
             "omit generic physical sensors product inheritance",
         ),
-        # QEMU's virtio GPU/network/RNG, emulated HDA and xHCI/input devices do
-        # not consume Linux PC firmware blobs. Android-x86 otherwise copies the
-        # entire generic firmware catalogue (plus optional Silead/Intel SOF),
-        # which is pure dead weight in Jawal's fixed virtual hardware contract.
         (
             kernel_task,
             "\t$(COPY_FIRMWARE_SCRIPT) --zstd -v $(FIRMWARE_DEST)\n",
@@ -126,6 +135,13 @@ def main() -> int:
     try:
         for path, old, new, label in replacements:
             replace_exact(path, old, new, label)
+
+        ensure_after(
+            board,
+            "TARGET_EXTRA_KERNEL_MODULES := ",
+            "TARGET_KERNEL_DIFFCONFIG ?= device/jawal/jawal-kernel-minimal.config",
+            "use Jawal minimal virtual-hardware kernel diffconfig",
+        )
     except PatchError as exc:
         print(f"FAIL {exc}")
         return 2
