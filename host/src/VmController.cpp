@@ -324,22 +324,84 @@ bool VmController::Start(HWND renderParent, const VmConfig& config, std::wstring
     std::vector<wchar_t> mutableCommand(command.begin(), command.end());
     mutableCommand.push_back(L'\0');
 
+    job_ = CreateJobObjectW(nullptr, nullptr);
+    if (!job_) {
+        std::error_code ec;
+        std::filesystem::remove(sessionTokenFile_, ec);
+        runtimeDir_.clear();
+        sessionToken_.clear();
+        sessionTokenFile_.clear();
+        if (error) *error = L"تعذر إنشاء حاوية أمان لعملية Android.";
+        return false;
+    }
+
+    JOBOBJECT_EXTENDED_LIMIT_INFORMATION jobInfo{};
+    jobInfo.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+    if (!SetInformationJobObject(job_, JobObjectExtendedLimitInformation,
+                                 &jobInfo, sizeof(jobInfo))) {
+        CloseHandle(job_);
+        job_ = nullptr;
+        std::error_code ec;
+        std::filesystem::remove(sessionTokenFile_, ec);
+        runtimeDir_.clear();
+        sessionToken_.clear();
+        sessionTokenFile_.clear();
+        if (error) *error = L"تعذر إعداد حماية عملية Android.";
+        return false;
+    }
+
     STARTUPINFOW startup{};
     startup.cb = sizeof(startup);
 
     PROCESS_INFORMATION pi{};
     const BOOL created = CreateProcessW(
         effective.qemuExe.c_str(), mutableCommand.data(), nullptr, nullptr, FALSE,
-        CREATE_NO_WINDOW | CREATE_UNICODE_ENVIRONMENT, nullptr,
+        CREATE_NO_WINDOW | CREATE_UNICODE_ENVIRONMENT | CREATE_SUSPENDED, nullptr,
         effective.runtimeDir.c_str(), &startup, &pi);
 
     if (!created) {
+        CloseHandle(job_);
+        job_ = nullptr;
         std::error_code ec;
         std::filesystem::remove(sessionTokenFile_, ec);
         runtimeDir_.clear();
         sessionToken_.clear();
         sessionTokenFile_.clear();
         if (error) *error = L"تعذر تشغيل Android. خطأ Windows: " + std::to_wstring(GetLastError());
+        return false;
+    }
+
+    if (!AssignProcessToJobObject(job_, pi.hProcess)) {
+        const DWORD assignError = GetLastError();
+        TerminateProcess(pi.hProcess, 1);
+        WaitForSingleObject(pi.hProcess, 5000);
+        CloseHandle(pi.hThread);
+        CloseHandle(pi.hProcess);
+        CloseHandle(job_);
+        job_ = nullptr;
+        std::error_code ec;
+        std::filesystem::remove(sessionTokenFile_, ec);
+        runtimeDir_.clear();
+        sessionToken_.clear();
+        sessionTokenFile_.clear();
+        if (error) *error = L"تعذر ربط Android بحاوية الحماية. خطأ Windows: " + std::to_wstring(assignError);
+        return false;
+    }
+
+    if (ResumeThread(pi.hThread) == static_cast<DWORD>(-1)) {
+        const DWORD resumeError = GetLastError();
+        TerminateProcess(pi.hProcess, 1);
+        WaitForSingleObject(pi.hProcess, 5000);
+        CloseHandle(pi.hThread);
+        CloseHandle(pi.hProcess);
+        CloseHandle(job_);
+        job_ = nullptr;
+        std::error_code ec;
+        std::filesystem::remove(sessionTokenFile_, ec);
+        runtimeDir_.clear();
+        sessionToken_.clear();
+        sessionTokenFile_.clear();
+        if (error) *error = L"تعذر بدء عملية Android المحمية. خطأ Windows: " + std::to_wstring(resumeError);
         return false;
     }
 
@@ -407,32 +469,40 @@ bool VmController::SaveQuickResume(const std::filesystem::path& marker, std::wst
 }
 
 void VmController::Stop(bool tryQuickResume, const std::filesystem::path& marker) noexcept {
-    if (!process_.hProcess) return;
+    if (process_.hProcess) {
+        bool saved = false;
+        if (tryQuickResume && !marker.empty()) {
+            std::wstring ignored;
+            saved = SaveQuickResume(marker, &ignored);
+        }
 
-    bool saved = false;
-    if (tryQuickResume && !marker.empty()) {
-        std::wstring ignored;
-        saved = SaveQuickResume(marker, &ignored);
-    }
+        renderBridge_.Detach();
 
-    renderBridge_.Detach();
-
-    if (saved) {
-        QmpCommand("{\"execute\":\"quit\"}", nullptr);
-        WaitForSingleObject(process_.hProcess, 5000);
-    } else {
-        QmpCommand("{\"execute\":\"system_powerdown\"}", nullptr);
-        if (WaitForSingleObject(process_.hProcess, 8000) == WAIT_TIMEOUT) {
+        if (saved) {
             QmpCommand("{\"execute\":\"quit\"}", nullptr);
-            if (WaitForSingleObject(process_.hProcess, 1500) == WAIT_TIMEOUT) {
-                TerminateProcess(process_.hProcess, 0);
-                WaitForSingleObject(process_.hProcess, 1000);
+            WaitForSingleObject(process_.hProcess, 5000);
+        } else {
+            QmpCommand("{\"execute\":\"system_powerdown\"}", nullptr);
+            if (WaitForSingleObject(process_.hProcess, 8000) == WAIT_TIMEOUT) {
+                QmpCommand("{\"execute\":\"quit\"}", nullptr);
+                if (WaitForSingleObject(process_.hProcess, 1500) == WAIT_TIMEOUT) {
+                    TerminateProcess(process_.hProcess, 0);
+                    WaitForSingleObject(process_.hProcess, 1000);
+                }
             }
         }
+
+        CloseHandle(process_.hProcess);
+        process_ = {};
     }
 
-    CloseHandle(process_.hProcess);
-    process_ = {};
+    // Normal shutdown reaches here after QEMU has exited. If Jawal.exe itself
+    // crashes or is force-killed, Windows closes this handle and the job's
+    // KILL_ON_JOB_CLOSE rule terminates QEMU automatically.
+    if (job_) {
+        CloseHandle(job_);
+        job_ = nullptr;
+    }
 
     std::error_code ec;
     if (!sessionTokenFile_.empty()) std::filesystem::remove(sessionTokenFile_, ec);
