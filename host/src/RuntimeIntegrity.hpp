@@ -10,4 +10,9 @@ namespace jawal {
 // the immutable Android payload and the Windows virtualization binaries are covered.
 bool VerifyRuntimeIntegrity(const std::filesystem::path& runtimeDir, std::wstring* error);
 
+// Stable fingerprint of the final runtime manifest. Quick Resume snapshots are
+// valid only while this fingerprint matches, because VM state is coupled to the
+// exact kernel/system/QEMU runtime that created it.
+bool RuntimeManifestFingerprint(const std::filesystem::path& runtimeDir, std::string* fingerprint);
+
 } // namespace jawal
