@@ -5,6 +5,9 @@ param(
     [double]$MaxInstallerMiB = 1200,
     [double]$MaxInstalledMiB = 3072,
     [double]$MaxQemuMiB = 250,
+    [double]$TargetInstallerMiB = 900,
+    [double]$TargetSystemMiB = 650,
+    [double]$TargetQemuMiB = 180,
     [switch]$RequireSignature,
     [string]$ReportPath = "dist/reports/release-gate.json"
 )
@@ -24,6 +27,7 @@ $requiredRuntimeFiles = @(
     "images\jawal-data-template.qcow2",
     "qemu\qemu-system-x86_64.exe",
     "qemu\qemu-img.exe",
+    "firmware\edk2-x86_64-code.fd",
     "runtime.sha256"
 )
 foreach ($relative in $requiredRuntimeFiles) {
@@ -48,6 +52,10 @@ $qemuDir = Join-Path $runtimePath "qemu"
 $qemuBytes = Get-TreeBytes $qemuDir
 $qemuMiB = Get-MiB $qemuBytes
 $qemuFiles = @(Get-ChildItem -LiteralPath $qemuDir -File)
+$firmwareDir = Join-Path $runtimePath "firmware"
+$firmwareBytes = Get-TreeBytes $firmwareDir
+$firmwareMiB = Get-MiB $firmwareBytes
+$firmwareFiles = @(Get-ChildItem -LiteralPath $firmwareDir -File)
 $systemDisk = Join-Path $runtimePath "images\jawal-system.qcow2"
 $dataTemplate = Join-Path $runtimePath "images\jawal-data-template.qcow2"
 $kernel = Join-Path $runtimePath "android\kernel"
@@ -66,6 +74,18 @@ if ($installedMiB -gt $MaxInstalledMiB) {
 if ($qemuMiB -gt $MaxQemuMiB) {
     throw "QEMU payload budget exceeded: $qemuMiB MiB > $MaxQemuMiB MiB. Check dependency-driven packaging; do not ship a full QEMU distribution."
 }
+
+$targetWarnings = @()
+if ($installerMiB -gt $TargetInstallerMiB) {
+    $targetWarnings += "Installer is above the $TargetInstallerMiB MiB optimization target: $installerMiB MiB"
+}
+if ($systemMiB -gt $TargetSystemMiB) {
+    $targetWarnings += "Jawal system disk is above the $TargetSystemMiB MiB optimization target: $systemMiB MiB"
+}
+if ($qemuMiB -gt $TargetQemuMiB) {
+    $targetWarnings += "QEMU payload is above the $TargetQemuMiB MiB optimization target: $qemuMiB MiB"
+}
+foreach ($warning in $targetWarnings) { Write-Warning $warning }
 
 # The minimal runtime must not accidentally contain unrelated QEMU system
 # emulators. Jawal executes only x86_64 plus qemu-img.
@@ -100,6 +120,8 @@ $breakdown = [ordered]@{
     dataTemplateMiB = $dataTemplateMiB
     qemuMiB = $qemuMiB
     qemuFileCount = $qemuFiles.Count
+    firmwareMiB = $firmwareMiB
+    firmwareFileCount = $firmwareFiles.Count
 }
 
 $output = [ordered]@{
@@ -109,6 +131,10 @@ $output = [ordered]@{
     maxInstallerMiB = $MaxInstallerMiB
     maxInstalledMiB = $MaxInstalledMiB
     maxQemuMiB = $MaxQemuMiB
+    targetInstallerMiB = $TargetInstallerMiB
+    targetSystemMiB = $TargetSystemMiB
+    targetQemuMiB = $TargetQemuMiB
+    targetWarnings = $targetWarnings
     sizeBreakdown = $breakdown
     installerSignature = [string]$installerSignature.Status
     jawalSignature = [string]$jawalSignature.Status
@@ -118,7 +144,7 @@ $output = [ordered]@{
 $output | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath $report -Encoding UTF8
 
 Write-Host "PASS: release gate"
-Write-Host "Installer: $installerMiB MiB / $MaxInstallerMiB MiB"
-Write-Host "Installed runtime: $installedMiB MiB / $MaxInstalledMiB MiB"
-Write-Host "Breakdown: host=$jawalMiB MiB, boot=$bootMiB MiB, system=$systemMiB MiB, data-template=$dataTemplateMiB MiB, qemu=$qemuMiB MiB ($($qemuFiles.Count) files)"
+Write-Host "Installer: $installerMiB MiB / target $TargetInstallerMiB / max $MaxInstallerMiB MiB"
+Write-Host "Installed runtime: $installedMiB MiB / max $MaxInstalledMiB MiB"
+Write-Host "Breakdown: host=$jawalMiB MiB, boot=$bootMiB MiB, system=$systemMiB MiB, data-template=$dataTemplateMiB MiB, qemu=$qemuMiB MiB ($($qemuFiles.Count) files), firmware=$firmwareMiB MiB"
 Write-Host "SHA256 manifest: $shaFile"
