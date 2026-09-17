@@ -74,6 +74,7 @@ jobs:
         run: |
           bash -n android/scripts/sync-and-build.sh
           bash -n android/scripts/package-runtime.sh
+          bash -n tools/setup-android-builder.sh
           bash -n tools/check-android-builder.sh
           bash -n tools/fetch-store.sh
           bash -n tools/validate-product.sh
