@@ -1,10 +1,9 @@
 #include "RuntimeWatchdog.hpp"
 
 #include "Diagnostics.hpp"
-#include "PackageBridge.hpp"
+#include "GuestReadiness.hpp"
 
 #include <chrono>
-#include <string>
 
 namespace jawal {
 namespace {
@@ -39,8 +38,7 @@ void RuntimeWatchdog::Run(HWND owner, UINT recoveryMessage) {
     bool guestBecameReady = false;
 
     while (running_.load() && std::chrono::steady_clock::now() < bootDeadline) {
-        std::string response;
-        if (GuestControl("PING", &response)) {
+        if (GuestReadyFast()) {
             guestBecameReady = true;
             LogDiagnostic(L"Guest watchdog armed after first successful health ping");
             break;
@@ -63,8 +61,7 @@ void RuntimeWatchdog::Run(HWND owner, UINT recoveryMessage) {
         if (wake_.wait_for(lock, kProbeInterval, [this] { return !running_.load(); })) return;
         lock.unlock();
 
-        std::string response;
-        if (GuestControl("PING", &response)) {
+        if (GuestReadyFast()) {
             if (failures != 0) LogDiagnostic(L"Guest watchdog health recovered before restart threshold");
             failures = 0;
             continue;
