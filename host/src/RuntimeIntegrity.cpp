@@ -76,6 +76,10 @@ std::string Lower(std::string value) {
 
 } // namespace
 
+bool RuntimeManifestFingerprint(const std::filesystem::path& runtimeDir, std::string* fingerprint) {
+    return Sha256File(runtimeDir / L"runtime.sha256", fingerprint);
+}
+
 bool VerifyRuntimeIntegrity(const std::filesystem::path& runtimeDir, std::wstring* error) {
     const auto manifestPath = runtimeDir / L"runtime.sha256";
     std::ifstream manifest(manifestPath);
