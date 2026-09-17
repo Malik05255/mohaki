@@ -101,6 +101,11 @@ require_path "PermissionController" '*/PermissionController*'
 require_path "WebView implementation" '*/WebView*' '*/webview*'
 require_path "Media framework/codecs" '*/bin/mediaserver' '*/bin/media.swcodec' '*/lib64/libstagefright*'
 require_path "Audio server" '*/bin/audioserver'
+# BlissOS QPR2 init.sh invokes these during boot-complete to initialize HDA
+# mixer/capture state. They are runtime dependencies, not optional CLI extras.
+require_path "ALSA state control" '*/bin/alsa_ctl'
+require_path "ALSA mixer control" '*/bin/alsa_amixer'
+require_path "ALSA UCM control" '*/bin/alsa_ucm' '*/bin/alsaucm'
 require_path "Package installer" '*/PackageInstaller*' '*/PackageInstallerService*'
 require_path "Documents UI" '*/DocumentsUI*'
 require_path "Download provider" '*/DownloadProvider*'
