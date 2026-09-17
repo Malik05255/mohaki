@@ -2,6 +2,7 @@ param(
     [string]$RuntimeDir = "dist/runtime",
     [int]$MaximumUncompressedMiB = 3200,
     [int]$MaximumQemuMiB = 250,
+    [string]$DependencyReportPath = "dist/reports/runtime/qemu-dependencies.json",
     [string]$ReportPath = "dist/reports/runtime-verification.json"
 )
 
@@ -63,15 +64,15 @@ if ($unexpectedQemuExecutables.Count -gt 0) {
     throw "Unrelated QEMU system emulators are present: $($unexpectedQemuExecutables.Name -join ', ')"
 }
 
-$dependencyReport = Join-Path $runtime "reports\qemu-dependencies.json"
-$dependencyEvidence = $null
-if (Test-Path -LiteralPath $dependencyReport -PathType Leaf) {
-    $dependencyEvidence = Get-Content -LiteralPath $dependencyReport -Raw | ConvertFrom-Json
-    if ($dependencyEvidence.unresolvedNonSystemImports) {
-        $props = @($dependencyEvidence.unresolvedNonSystemImports.PSObject.Properties)
-        if ($props.Count -gt 0) {
-            throw "QEMU dependency report contains unresolved non-system DLL imports."
-        }
+$dependencyReport = Join-Path $repoRoot $DependencyReportPath
+if (-not (Test-Path -LiteralPath $dependencyReport -PathType Leaf)) {
+    throw "QEMU dependency evidence is missing: $DependencyReportPath"
+}
+$dependencyEvidence = Get-Content -LiteralPath $dependencyReport -Raw | ConvertFrom-Json
+if ($dependencyEvidence.unresolvedNonSystemImports) {
+    $props = @($dependencyEvidence.unresolvedNonSystemImports.PSObject.Properties)
+    if ($props.Count -gt 0) {
+        throw "QEMU dependency report contains unresolved non-system DLL imports."
     }
 }
 
@@ -97,7 +98,7 @@ $report = [ordered]@{
     maximumQemuMiB = $MaximumQemuMiB
     qemuFileCount = $qemuFiles.Count
     verifiedRuntimeFiles = $hashResults
-    dependencyEvidencePresent = [bool]$dependencyEvidence
+    dependencyEvidence = $DependencyReportPath
     largestFiles = $largest
     measuredAtUtc = [DateTime]::UtcNow.ToString("o")
 }
