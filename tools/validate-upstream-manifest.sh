@@ -42,8 +42,10 @@ PY
 
 before="$(manifest_paths "$WORKDIR/resolved-before.xml")"
 
-required_paths=(
-  vendor/microg
+# These paths are intentionally removed by Jawal before source sync. If BlissOS
+# renames or removes one, fail here so the pruning manifest is reviewed instead
+# of discovering an invalid remove-project after a large builder is allocated.
+required_prunable_paths=(
   device/generic/firmware
   vendor/intel/proprietary/sof-bin
   vendor/silead/proprietary/firmware
@@ -55,14 +57,23 @@ required_paths=(
 )
 
 failed=0
-for path in "${required_paths[@]}"; do
+for path in "${required_prunable_paths[@]}"; do
   if grep -Fxq "$path" <<<"$before"; then
     printf 'PASS manifest path: %s\n' "$path"
   else
-    printf 'FAIL manifest path missing: %s\n' "$path" >&2
+    printf 'FAIL manifest path missing or renamed: %s\n' "$path" >&2
     failed=1
   fi
 done
+
+# microG is deliberately optional. As of the current voyager-x86-qpr2 manifest
+# it is absent, so Jawal's production default is vanilla + Aurora. If upstream
+# restores vendor/microg, record that fact without making the manifest gate fail.
+if grep -Fxq 'vendor/microg' <<<"$before"; then
+  echo "INFO upstream vendor/microg is present; Jawal microG builds may use it after product validation"
+else
+  echo "INFO upstream vendor/microg is absent; Jawal defaults to vanilla and requires an explicit compatible tree for microG"
+fi
 
 if (( failed != 0 )); then
   echo "BlissOS manifest contract changed before Jawal pruning was applied." >&2
@@ -85,18 +96,7 @@ cat > .repo/local_manifests/jawal-contract-test.xml <<'XML'
 XML
 
 after="$(manifest_paths "$WORKDIR/resolved-after.xml")"
-pruned_paths=(
-  device/generic/firmware
-  vendor/intel/proprietary/sof-bin
-  vendor/silead/proprietary/firmware
-  external/libva
-  external/libva-utils
-  hardware/intel/common/gmmlib
-  hardware/intel/common/media-driver
-  hardware/intel/common/vaapi
-)
-
-for path in "${pruned_paths[@]}"; do
+for path in "${required_prunable_paths[@]}"; do
   if grep -Fxq "$path" <<<"$after"; then
     printf 'FAIL local manifest did not remove: %s\n' "$path" >&2
     failed=1
@@ -105,15 +105,8 @@ for path in "${pruned_paths[@]}"; do
   fi
 done
 
-if ! grep -Fxq 'vendor/microg' <<<"$after"; then
-  echo "FAIL Jawal pruning unexpectedly removed vendor/microg." >&2
-  failed=1
-else
-  echo "PASS vendor/microg survives Jawal hardware pruning"
-fi
-
 if (( failed != 0 )); then
   exit 4
 fi
 
-echo "PASS: BlissOS $MANIFEST_BRANCH manifest still satisfies Jawal's source contract."
+echo "PASS: BlissOS $MANIFEST_BRANCH manifest still satisfies Jawal's source-pruning contract."
