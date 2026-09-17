@@ -57,6 +57,7 @@ def main() -> int:
     device = root / "device/generic/common/device.mk"
     init_sh = root / "device/generic/common/init.sh"
     kernel_task = root / "device/generic/common/build/tasks/kernel.mk"
+    aaropa = root / "bootable/aaropa/Android.mk"
 
     replacements = [
         (board, "AB_OTA_UPDATER := true", "AB_OTA_UPDATER := false", "disable Android A/B OTA machinery"),
@@ -127,6 +128,18 @@ def main() -> int:
             "\t$(if $(FIRMWARE_ENABLED),$(mk_kernel) INSTALL_MOD_PATH=$(abspath $(TARGET_OUT)) firmware_install)\n",
             "\t# Jawal: kernel firmware_install intentionally omitted for fixed QEMU hardware\n",
             "skip kernel external firmware installation",
+        ),
+        (
+            aaropa,
+            "INSTALLED_RADIOIMAGE_TARGET += $(PRODUCT_OUT)/ramdisk-recovery.img",
+            "# Jawal: recovery ramdisk omitted from radio images",
+            "remove recovery ramdisk from ISO radio-image dependencies",
+        ),
+        (
+            aaropa,
+            "BUILT_IMG := $(addprefix $(PRODUCT_OUT)/,initrd.img ramdisk-recovery.img) $(systemimg)",
+            "BUILT_IMG := $(PRODUCT_OUT)/initrd.img $(systemimg)",
+            "remove recovery ramdisk from ISO payload",
         ),
         (init_sh, "\tset_custom_ota\n", "\t# Jawal: Android-x86 OTA setup omitted\n", "skip Android-x86 OTA init"),
         (init_sh, "\tinit_hal_brcm_wifi\n", "\t# Jawal: physical Wi-Fi init omitted\n", "skip physical Wi-Fi init"),
