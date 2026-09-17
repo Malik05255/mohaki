@@ -42,6 +42,7 @@ BANNED_FILES=(
   '*/bin/thermal-daemon' '*/bin/hcitool' '*/bin/simpleperf' '*/bin/strace'
   '*/bin/virtualizationservice' '*/bin/vm' '*/bin/vm_shell'
   '*/bin/fastboot' '*/bin/lpdump' '*/bin/lpmake' '*/bin/lpadd' '*/bin/lpflash'
+  '*/bin/bootanimation'
   '*/bin/wpa_supplicant' '*/bin/hostapd' '*/bin/wpa_cli'
   '*/bin/hw/android.hardware.camera.provider.ranchu'
   '*/bin/hw/android.hardware.camera.provider.ranchu_minigbm'
