@@ -137,6 +137,14 @@ JAWAL_REMOVE_PACKAGES := \
     audio.bluetooth.default \
     com.android.btservices \
     BluetoothMidiService \
+    rfkill \
+    iw \
+    iwconfig \
+    crda \
+    wireless-regdb \
+    lsusb \
+    usb_modeswitch \
+    usb_modeswitch_dispatcher \
     awk \
     bash \
     bzip2 \
@@ -205,38 +213,9 @@ endif
 PRODUCT_PACKAGES := $(filter-out $(JAWAL_REMOVE_PACKAGES),$(PRODUCT_PACKAGES))
 PRODUCT_PACKAGES_DEBUG := $(filter-out $(JAWAL_REMOVE_PACKAGES),$(PRODUCT_PACKAGES_DEBUG))
 
-# Remove inherited hardware declarations for devices Jawal does not expose.
-# Also remove the stock handheld profile because it declares camera, Bluetooth,
-# sensors, telecom, printing and backup as mandatory. Jawal ships its own
-# truthful minimal feature profile below.
-PRODUCT_COPY_FILES := $(filter-out \
-    %/handheld_core_hardware.xml:% \
-    %/tablet_core_hardware.xml:% \
-    %/android.hardware.camera.xml:% \
-    %/android.hardware.camera.front.xml:% \
-    %/android.hardware.camera.any.xml:% \
-    %/android.hardware.camera.full.xml:% \
-    %/android.hardware.camera.autofocus.xml:% \
-    %/android.hardware.camera.raw.xml:% \
-    %/android.hardware.nfc.xml:% \
-    %/android.hardware.nfc.hce.xml:% \
-    %/android.hardware.nfc.hcef.xml:% \
-    %/android.hardware.uwb.xml:% \
-    %/android.hardware.bluetooth.xml:% \
-    %/android.hardware.bluetooth_le.xml:% \
-    %/android.hardware.wifi.xml:% \
-    %/android.hardware.wifi.direct.xml:% \
-    %/android.hardware.wifi.aware.xml:% \
-    %:$(TARGET_COPY_OUT_PRODUCT)/media/audio/alarms/% \
-    %:$(TARGET_COPY_OUT_PRODUCT)/media/audio/notifications/% \
-    %:$(TARGET_COPY_OUT_PRODUCT)/media/audio/ringtones/%,$(PRODUCT_COPY_FILES))
-
-PRODUCT_COPY_FILES += \
-    device/jawal/jawal_core_hardware.xml:$(TARGET_COPY_OUT_VENDOR)/etc/permissions/jawal_core_hardware.xml \
-    frameworks/base/data/sounds/Alarm_Classic.ogg:$(TARGET_COPY_OUT_PRODUCT)/media/audio/alarms/Alarm_Classic.ogg \
-    frameworks/base/data/sounds/notifications/pixiedust.ogg:$(TARGET_COPY_OUT_PRODUCT)/media/audio/notifications/pixiedust.ogg \
-    frameworks/base/data/sounds/newwavelabs/OnTheHunt.ogg:$(TARGET_COPY_OUT_PRODUCT)/media/audio/notifications/OnTheHunt.ogg \
-    frameworks/base/data/sounds/Ring_Synth_04.ogg:$(TARGET_COPY_OUT_PRODUCT)/media/audio/ringtones/Ring_Synth_04.ogg
+# PRODUCT_COPY_FILES pruning is intentionally centralized in prune-copyfiles.mk.
+# Keeping package and copy-file policies separate avoids duplicate destinations
+# and makes failures from upstream inheritance easier to audit.
 
 PRODUCT_BUILD_GENERIC_OTA_PACKAGE := false
 PRODUCT_MINIMIZE_JAVA_DEBUG_INFO := true
