@@ -45,15 +45,22 @@ BANNED_FILES=(
   '*/bin/wpa_supplicant' '*/bin/hostapd' '*/bin/wpa_cli'
   '*/bin/hw/android.hardware.camera.provider.ranchu'
   '*/bin/hw/android.hardware.camera.provider.ranchu_minigbm'
+  '*/bootanimation.zip'
 )
 
 for pattern in "${BANNED_FILES[@]}"; do
   if find "$PRODUCT_OUT" -path "$pattern" -print -quit | grep -q .; then
-    fail "Unused bare-metal/hardware file still present: $pattern"
+    fail "Unused bare-metal/hardware/visual file still present: $pattern"
   else
-    pass "Removed unused bare-metal/hardware file: $pattern"
+    pass "Removed unused bare-metal/hardware/visual file: $pattern"
   fi
 done
+
+if find "$PRODUCT_OUT" -name build.prop -type f -exec grep -Hq '^debug\.sf\.nobootanimation=1$' {} + 2>/dev/null; then
+  pass "Android boot animation disabled; Jawal host owns boot UX"
+else
+  fail "debug.sf.nobootanimation=1 missing from built product properties"
+fi
 
 require_path() {
   local label="$1"; shift
