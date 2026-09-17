@@ -125,7 +125,6 @@ if [[ -n "$CORE_PROFILE" ]]; then
     android.hardware.telephony
     android.hardware.sensor.accelerometer
     android.hardware.sensor.compass
-    android.hardware.microphone
     android.software.telecom
     android.software.print
     android.software.backup
@@ -138,6 +137,12 @@ if [[ -n "$CORE_PROFILE" ]]; then
       pass "Core profile does not claim: $feature"
     fi
   done
+
+  if grep -Fq 'name="android.hardware.microphone"' "$CORE_PROFILE"; then
+    pass "Core profile declares duplex microphone support"
+  else
+    fail "Jawal duplex audio is enabled but microphone capability is missing"
+  fi
 fi
 
 # Stock audio catalogue is intentionally reduced, but audio quality/codec stack
