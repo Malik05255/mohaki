@@ -18,6 +18,9 @@ struct VmConfig {
     unsigned cpuCores{4};
     unsigned displayWidth{1080};
     unsigned displayHeight{1920};
+    // 1080 px / 420 dpi ~= 411 dp: a normal Android phone-width UI rather than
+    // the tablet-like 1080 dp layout produced by an mdpi default.
+    unsigned displayDensityDpi{420};
     unsigned refreshRate{60};
     bool resumeQuickState{false};
 };
