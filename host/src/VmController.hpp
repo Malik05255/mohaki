@@ -48,6 +48,8 @@ private:
     PROCESS_INFORMATION process_{};
     RenderBridge renderBridge_{};
     std::filesystem::path runtimeDir_{};
+    std::filesystem::path sessionTokenFile_{};
+    std::string sessionToken_{};
 };
 
 } // namespace jawal
