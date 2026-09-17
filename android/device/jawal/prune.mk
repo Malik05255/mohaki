@@ -147,7 +147,6 @@ JAWAL_REMOVE_PACKAGES := \
     lsusb \
     usb_modeswitch \
     usb_modeswitch_dispatcher \
-    awk \
     bash \
     bzip2 \
     curl \
