@@ -2,13 +2,43 @@
 
 #include <winsock2.h>
 #include <ws2tcpip.h>
+#include <windows.h>
 
 #include <array>
+#include <cctype>
+#include <filesystem>
+#include <fstream>
 #include <string>
 
 namespace jawal {
+namespace {
+
+std::filesystem::path SessionTokenPath() {
+    std::array<wchar_t, 32768> buffer{};
+    const DWORD chars = GetEnvironmentVariableW(L"LOCALAPPDATA", buffer.data(), static_cast<DWORD>(buffer.size()));
+    if (chars == 0 || chars >= buffer.size()) return {};
+    return std::filesystem::path(buffer.data()) / L"Jawal" / L"session.token";
+}
+
+bool ReadSessionToken(std::string* token) {
+    if (!token) return false;
+    token->clear();
+    const auto path = SessionTokenPath();
+    if (path.empty()) return false;
+    std::ifstream input(path);
+    std::string value;
+    if (!input || !std::getline(input, value) || value.size() != 64) return false;
+    for (const unsigned char c : value) if (!std::isxdigit(c)) return false;
+    *token = std::move(value);
+    return true;
+}
+
+} // namespace
 
 bool GuestReadyFast() noexcept {
+    std::string sessionToken;
+    if (!ReadSessionToken(&sessionToken)) return false;
+
     WSADATA wsa{};
     if (WSAStartup(MAKEWORD(2, 2), &wsa) != 0) return false;
 
@@ -31,8 +61,8 @@ bool GuestReadyFast() noexcept {
         setsockopt(socket, SOL_SOCKET, SO_SNDTIMEO,
                    reinterpret_cast<const char*>(&timeoutMs), sizeof(timeoutMs));
 
-        static constexpr char ping[] = "PING\n";
-        ok = send(socket, ping, static_cast<int>(sizeof(ping) - 1), 0) == static_cast<int>(sizeof(ping) - 1);
+        const std::string ping = "AUTH " + sessionToken + " PING\n";
+        ok = send(socket, ping.data(), static_cast<int>(ping.size()), 0) == static_cast<int>(ping.size());
         if (ok) {
             std::array<char, 64> buffer{};
             const int received = recv(socket, buffer.data(), static_cast<int>(buffer.size() - 1), 0);
