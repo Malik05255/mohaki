@@ -32,10 +32,15 @@ $(eval $(call jawal_drop_copy_containing,/ppp/))
 $(eval $(call jawal_drop_copy_containing,pci.ids))
 $(eval $(call jawal_drop_copy_containing,usb.ids))
 
+# The thermal-daemon package is removed from Jawal; its PC-specific XML database
+# is therefore orphaned and should not consume runtime space.
+$(eval $(call jawal_drop_copy_containing,thermal-daemon/))
+$(eval $(call jawal_drop_copy_containing,thermal-conf.xml))
+$(eval $(call jawal_drop_copy_containing,thermal-cpu-cdev-order.xml))
+
 # Jawal owns the visible boot experience on Windows. Android's stock/custom boot
-# animation archives are redundant once debug.sf.nobootanimation=1 is set.
-# Keep the tiny bootanimation binary for service compatibility until the first
-# full production build proves it can also be removed safely.
+# animation archive is redundant once debug.sf.nobootanimation=1 is set; the
+# bootanimation executable itself is removed in prune.mk.
 $(eval $(call jawal_drop_copy_containing,bootanimation.zip))
 
 # Remove the large stock ringtone/alarm/notification catalogue. This does not
