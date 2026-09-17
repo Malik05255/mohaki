@@ -13,6 +13,7 @@ $dataDir = Join-Path $env:LOCALAPPDATA "Jawal"
 $dataDisk = Join-Path $dataDir "data.qcow2"
 $dataMarker = Join-Path $dataDir "data-independent-v1.marker"
 $marker = Join-Path $dataDir "quickresume.marker"
+$sessionTokenPath = Join-Path $dataDir "session.token"
 $repoRoot = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
 $probe = Join-Path $PSScriptRoot "probe-guest.ps1"
 $report = Join-Path $repoRoot $ReportPath
@@ -20,6 +21,7 @@ New-Item (Split-Path -Parent $report) -ItemType Directory -Force | Out-Null
 
 if (-not (Test-Path -LiteralPath $qemuImg -PathType Leaf)) { throw "qemu-img missing: $qemuImg" }
 Remove-Item -LiteralPath $marker -Force -ErrorAction SilentlyContinue
+Remove-Item -LiteralPath $sessionTokenPath -Force -ErrorAction SilentlyContinue
 
 function Start-And-WaitReady {
     param([string]$Exe, [int]$Timeout)
@@ -62,23 +64,46 @@ function Assert-StandaloneData {
     return $info
 }
 
-function Assert-V2Marker {
+function Assert-V3Marker {
     if (-not (Test-Path -LiteralPath $marker -PathType Leaf)) {
         throw "Quick-resume marker is missing."
     }
     $lines = @(Get-Content -LiteralPath $marker)
-    if ($lines.Count -lt 2 -or $lines[0] -ne 'jawal_quick_resume_v2' -or
-        $lines[1] -notmatch '^runtime=[0-9a-f]{64}$') {
-        throw "Quick-resume marker is not bound to a runtime SHA-256 fingerprint."
+    if ($lines.Count -lt 3 -or $lines[0] -ne 'jawal_quick_resume_v3' -or
+        $lines[1] -notmatch '^runtime=[0-9a-f]{64}$' -or
+        $lines[2] -notmatch '^session=[0-9a-f]{64}$') {
+        throw "Quick-resume marker is not bound to runtime and authenticated session fingerprints."
     }
-    return $lines[1].Substring('runtime='.Length)
+    return [pscustomobject]@{
+        Runtime = $lines[1].Substring('runtime='.Length)
+        Session = $lines[2].Substring('session='.Length)
+    }
+}
+
+function Assert-LiveSessionToken([string]$Expected) {
+    if (-not (Test-Path -LiteralPath $sessionTokenPath -PathType Leaf)) {
+        throw "Live authenticated session token is missing while Jawal is running."
+    }
+    $actual = (Get-Content -LiteralPath $sessionTokenPath -Raw).Trim()
+    if ($actual -notmatch '^[0-9a-f]{64}$') { throw "Live session token is malformed." }
+    if ($Expected -and $actual -ne $Expected) {
+        throw "Live session token does not match the Quick Resume snapshot session."
+    }
+    return $actual
 }
 
 $first = Start-And-WaitReady -Exe $jawal -Timeout $TimeoutSeconds
 $coldReadyMs = $first.ElapsedMs
+$firstLiveSession = Assert-LiveSessionToken ""
 Close-Gracefully $first.Process
 
-$firstFingerprint = Assert-V2Marker
+$firstMarker = Assert-V3Marker
+if ($firstMarker.Session -ne $firstLiveSession) {
+    throw "Saved Quick Resume marker did not preserve the cold-boot authenticated session token."
+}
+if (Test-Path -LiteralPath $sessionTokenPath -PathType Leaf) {
+    throw "Session token file survived after Jawal/QEMU shutdown."
+}
 $null = Assert-StandaloneData
 
 $snapshotOutput = & $qemuImg snapshot -l $dataDisk 2>&1 | Out-String
@@ -91,9 +116,6 @@ $markerBeforeResumeUtc = (Get-Item -LiteralPath $marker).LastWriteTimeUtc
 $second = Start-And-WaitReady -Exe $jawal -Timeout $TimeoutSeconds
 $resumeReadyMs = $second.ElapsedMs
 try {
-    # VmController deletes this marker only when -loadvm fails or when the marker
-    # does not match the current runtime. Check while Android is running, before
-    # graceful shutdown can write a replacement marker.
     if (-not (Test-Path -LiteralPath $marker -PathType Leaf)) {
         throw "Quick Resume fell back to a cold boot; the resume marker was invalidated during startup."
     }
@@ -101,15 +123,19 @@ try {
     if ($markerDuringResumeUtc -ne $markerBeforeResumeUtc) {
         throw "Quick-resume marker changed during startup; expected the existing snapshot marker to remain unchanged."
     }
+    $resumedLiveSession = Assert-LiveSessionToken $firstMarker.Session
     $null = Assert-StandaloneData
 }
 finally {
     Close-Gracefully $second.Process
 }
 
-$secondFingerprint = Assert-V2Marker
-if ($secondFingerprint -ne $firstFingerprint) {
-    throw "Runtime fingerprint changed without a runtime update during the same Stage 4 test."
+$secondMarker = Assert-V3Marker
+if ($secondMarker.Runtime -ne $firstMarker.Runtime -or $secondMarker.Session -ne $firstMarker.Session) {
+    throw "Quick Resume did not preserve its runtime/session identity across the resumed session."
+}
+if (Test-Path -LiteralPath $sessionTokenPath -PathType Leaf) {
+    throw "Session token file survived after resumed Jawal shutdown."
 }
 $null = Assert-StandaloneData
 
@@ -118,11 +144,13 @@ if ($LASTEXITCODE -ne 0 -or $snapshotAfterOutput -notmatch 'jawal_quick_resume')
     throw "Quick-resume snapshot disappeared after the resumed session was saved again."
 }
 
-# Corrupt only the authorization fingerprint, not the VM snapshot or runtime.
-# Jawal must reject this marker before asking QEMU to load the incompatible state.
+# Corrupt only the runtime authorization fingerprint while retaining the old
+# session token. Jawal must reject the whole snapshot and generate a fresh cold-
+# boot session rather than trusting the stale in-memory Android state.
 @(
-    'jawal_quick_resume_v2',
-    ('runtime=' + ('0' * 64))
+    'jawal_quick_resume_v3',
+    ('runtime=' + ('0' * 64)),
+    ('session=' + $secondMarker.Session)
 ) | Set-Content -LiteralPath $marker -Encoding ascii
 
 $third = Start-And-WaitReady -Exe $jawal -Timeout $TimeoutSeconds
@@ -131,15 +159,25 @@ try {
     if (Test-Path -LiteralPath $marker -PathType Leaf) {
         throw "Jawal did not invalidate a quick-resume marker from a different runtime fingerprint."
     }
+    $freshColdSession = Assert-LiveSessionToken ""
+    if ($freshColdSession -eq $secondMarker.Session) {
+        throw "Cold boot after stale snapshot rejection reused the old authenticated session token."
+    }
     $null = Assert-StandaloneData
 }
 finally {
     Close-Gracefully $third.Process
 }
 
-$recoveredFingerprint = Assert-V2Marker
-if ($recoveredFingerprint -ne $firstFingerprint) {
+$recoveredMarker = Assert-V3Marker
+if ($recoveredMarker.Runtime -ne $firstMarker.Runtime) {
     throw "Cold boot after runtime mismatch did not write the current runtime fingerprint."
+}
+if ($recoveredMarker.Session -eq $secondMarker.Session) {
+    throw "Cold boot after runtime mismatch did not rotate the authenticated session token."
+}
+if (Test-Path -LiteralPath $sessionTokenPath -PathType Leaf) {
+    throw "Session token file survived after final Jawal shutdown."
 }
 
 [ordered]@{
@@ -148,11 +186,15 @@ if ($recoveredFingerprint -ne $firstFingerprint) {
     resumeUsedWithoutColdFallback = $true
     snapshotPresentAfterResume = $true
     runtimeFingerprintBoundMarker = $true
+    sessionTokenBoundMarker = $true
+    sessionTokenReusedOnlyForResume = $true
+    sessionTokenRemovedOnShutdown = $true
     mismatchedRuntimeMarkerRejected = $true
+    freshSessionAfterColdFallback = $true
     freshMarkerWrittenAfterColdFallback = $true
     dataRemainedStandalone = $true
     markerPresent = (Test-Path -LiteralPath $marker -PathType Leaf)
-    runtimeFingerprint = $recoveredFingerprint
+    runtimeFingerprint = $recoveredMarker.Runtime
     coldReadyMs = $coldReadyMs
     resumeReadyMs = $resumeReadyMs
     runtimeMismatchColdReadyMs = $runtimeMismatchColdReadyMs
@@ -161,5 +203,5 @@ if ($recoveredFingerprint -ne $firstFingerprint) {
     completedAtUtc = [DateTime]::UtcNow.ToString("o")
 } | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath $report -Encoding UTF8
 
-Write-Host "PASS: quick-resume uses matching runtime state and rejects stale snapshots after runtime changes."
+Write-Host "PASS: Quick Resume is runtime-bound, session-authenticated and rotates credentials after cold fallback."
 Write-Host "Cold: ${coldReadyMs}ms; resume: ${resumeReadyMs}ms; mismatch cold boot: ${runtimeMismatchColdReadyMs}ms"
