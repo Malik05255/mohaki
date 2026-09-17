@@ -41,6 +41,13 @@ function Reset-DataState {
     }
 }
 
+function Get-DataImageInfo {
+    param([Parameter(Mandatory = $true)] [string]$Path)
+    $json = (& $qemuImg info --output=json $Path) -join "`n"
+    if ($LASTEXITCODE -ne 0) { throw "qemu-img info failed for $Path." }
+    return $json | ConvertFrom-Json
+}
+
 function Assert-StandaloneDataDisk {
     if (-not (Test-Path -LiteralPath $dataDisk -PathType Leaf)) {
         throw "Jawal did not create data.qcow2."
@@ -49,9 +56,7 @@ function Assert-StandaloneDataDisk {
         throw "Jawal data image is missing the standalone-data marker."
     }
 
-    $json = (& $qemuImg info --output=json $dataDisk) -join "`n"
-    if ($LASTEXITCODE -ne 0) { throw "qemu-img info failed for Jawal user data." }
-    $info = $json | ConvertFrom-Json
+    $info = Get-DataImageInfo -Path $dataDisk
     if ($info.PSObject.Properties.Name -contains 'backing-filename' -and $info.'backing-filename') {
         throw "Jawal user data still depends on backing file: $($info.'backing-filename')"
     }
@@ -71,14 +76,24 @@ function Stop-Jawal($process) {
     }
 }
 
-# A fresh start must create independent sparse user data from the runtime
-# template; the data image may not keep the runtime template as a backing file.
+# Recreate the historical Jawal layout: a user-data overlay backed directly by
+# the runtime template. Current Jawal must flatten this before Android boots so
+# future runtime upgrades cannot invalidate the user's data chain.
 Reset-DataState
+& $qemuImg create -f qcow2 -F qcow2 -b $template $dataDisk | Out-Null
+if ($LASTEXITCODE -ne 0 -or -not (Test-Path $dataDisk)) {
+    throw "Unable to create legacy Jawal data overlay fixture."
+}
+$legacyInfo = Get-DataImageInfo -Path $dataDisk
+if (-not $legacyInfo.'backing-filename') {
+    throw "Legacy migration fixture unexpectedly has no backing file."
+}
+
 $first = Start-Process -FilePath $jawal -PassThru
 try {
     $before = & $probe -TimeoutSeconds $TimeoutSeconds -RequirePhoneFeatures
     $firstImage = Assert-StandaloneDataDisk
-    if ($before.smokeInstalled) { throw "Smoke app unexpectedly exists on pristine data disk." }
+    if ($before.smokeInstalled) { throw "Smoke app unexpectedly exists on migrated pristine data disk." }
 
     & $pkg install $apk
     if ($LASTEXITCODE -ne 0) { throw "Unable to install smoke APK before factory reset." }
@@ -91,7 +106,8 @@ finally { Stop-Jawal $first }
 $preResetBytes = (Get-Item $dataDisk).Length
 
 # Simulate the destructive data lifecycle used by the factory-reset path. The
-# next Jawal start must independently reconstruct a clean data image.
+# next Jawal start has no data disk and must independently reconstruct a clean
+# standalone image from the template.
 Reset-DataState
 $second = Start-Process -FilePath $jawal -PassThru
 try {
@@ -102,6 +118,8 @@ try {
 
     [ordered]@{
         passed = $true
+        legacyBackingFixture = [string]$legacyInfo.'backing-filename'
+        legacyOverlayMigrated = -not [bool]$firstImage.'backing-filename'
         installedBeforeReset = $true
         installedAfterReset = [bool]$after.smokeInstalled
         standaloneBeforeReset = -not [bool]$firstImage.'backing-filename'
@@ -111,6 +129,6 @@ try {
         android = $after
         completedAtUtc = [DateTime]::UtcNow.ToString("o")
     } | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath $report -Encoding UTF8
-    Write-Host "PASS: factory-reset lifecycle recreated clean standalone Android user data."
+    Write-Host "PASS: legacy data migrated and factory reset recreated clean standalone Android user data."
 }
 finally { Stop-Jawal $second }
