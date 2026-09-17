@@ -38,6 +38,5 @@ jobs:
 
       - name: Verify BlissOS QPR2 source contract without syncing AOSP
         env:
-          PATH: ${{ env.HOME }}/.local/bin:${{ env.PATH }}
           JAWAL_ANDROID_BRANCH: voyager-x86-qpr2
         run: tools/validate-upstream-manifest.sh
