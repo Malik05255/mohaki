@@ -20,6 +20,12 @@ $(eval $(call jawal_drop_copy_containing,bluetooth_audio_policy_configuration))
 $(eval $(call jawal_drop_copy_containing,android.hardware.usb.host.xml))
 $(eval $(call jawal_drop_copy_containing,android.hardware.usb.accessory.xml))
 
+# Jawal owns the visible boot experience on Windows. Android's stock/custom boot
+# animation archives are redundant once debug.sf.nobootanimation=1 is set.
+# Keep the tiny bootanimation binary for service compatibility until the first
+# full production build proves it can also be removed safely.
+$(eval $(call jawal_drop_copy_containing,bootanimation.zip))
+
 # Remove the large stock ringtone/alarm/notification catalogue. This does not
 # remove AudioFlinger, Audio HALs, MediaCodec or any playback/recording codec.
 $(eval $(call jawal_drop_copy_containing,/media/audio/alarms/))
