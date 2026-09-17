@@ -3,9 +3,9 @@
 
 The synced Bliss/Android-Generic source targets arbitrary physical PCs. Jawal is a
 fixed QEMU/WHPX virtual phone, so physical Bluetooth/GPS/sensor stacks, physical
-GPU/media driver families, generic PC firmware and their init paths are dead weight.
-Patches are exact and fail closed when upstream changes, preventing silent edits
-to unexpected source.
+GPU/media driver families, generic PC firmware, recovery/OTA machinery and their
+init paths are dead weight. Patches are exact and fail closed when upstream
+changes, preventing silent edits to unexpected source.
 """
 from __future__ import annotations
 
@@ -59,6 +59,8 @@ def main() -> int:
     kernel_task = root / "device/generic/common/build/tasks/kernel.mk"
 
     replacements = [
+        (board, "AB_OTA_UPDATER := true", "AB_OTA_UPDATER := false", "disable Android A/B OTA machinery"),
+        (board, "#TARGET_NO_RECOVERY ?= true", "TARGET_NO_RECOVERY := true", "disable unused Android recovery image"),
         (board, "BOARD_HAVE_BLUETOOTH := true", "BOARD_HAVE_BLUETOOTH := false", "disable physical Bluetooth board support"),
         (board, "BOARD_HAVE_BLUETOOTH_LINUX := true", "BOARD_HAVE_BLUETOOTH_LINUX := false", "disable Linux Bluetooth vendor support"),
         (board, "BOARD_HAVE_BLUETOOTH_INTEL_ICNV := true", "BOARD_HAVE_BLUETOOTH_INTEL_ICNV := false", "disable Intel physical Bluetooth support"),
