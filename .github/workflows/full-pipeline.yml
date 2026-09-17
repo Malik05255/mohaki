@@ -37,10 +37,19 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Stage 1 - verify Android builder capacity
+      - name: Stage 1 - verify Android builder capacity and toolchain
         run: |
           chmod +x tools/check-android-builder.sh android/scripts/*.sh tools/*.sh
           tools/check-android-builder.sh
+
+      - name: Stage 1 - publish Android builder preflight evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: jawal-android-builder-preflight
+          retention-days: 7
+          if-no-files-found: warn
+          path: dist/preflight/android-builder.json
 
       - name: Stage 1 - build stripped Android 15 QPR2 JawalOS
         env:
