@@ -13,10 +13,25 @@ $ErrorActionPreference = "Stop"
 $deadline = [DateTime]::UtcNow.AddSeconds($TimeoutSeconds)
 $lastError = $null
 $health = $null
+$sessionTokenPath = Join-Path (Join-Path $env:LOCALAPPDATA "Jawal") "session.token"
+
+function Read-JawalSessionToken {
+    if (-not (Test-Path -LiteralPath $sessionTokenPath -PathType Leaf)) { return $null }
+    $value = (Get-Content -LiteralPath $sessionTokenPath -Raw).Trim()
+    if ($value -notmatch '^[0-9a-fA-F]{64}$') { return $null }
+    return $value
+}
 
 while ([DateTime]::UtcNow -lt $deadline) {
     $client = $null
+    $reader = $null
+    $writer = $null
     try {
+        $sessionToken = Read-JawalSessionToken
+        if ([string]::IsNullOrWhiteSpace($sessionToken)) {
+            throw "Jawal authenticated session token is not ready yet."
+        }
+
         $client = [System.Net.Sockets.TcpClient]::new()
         $task = $client.ConnectAsync($HostAddress, $Port)
         if (-not $task.Wait(1000)) {
@@ -28,10 +43,19 @@ while ([DateTime]::UtcNow -lt $deadline) {
 
         $stream = $client.GetStream()
         $stream.ReadTimeout = 3000
+        $stream.WriteTimeout = 3000
         $reader = [System.IO.StreamReader]::new($stream, [System.Text.Encoding]::UTF8, $false, 4096, $true)
+        $writer = [System.IO.StreamWriter]::new($stream, [System.Text.Encoding]::UTF8, 4096, $true)
+        $writer.NewLine = "`n"
+        $writer.WriteLine("AUTH $sessionToken")
+        $writer.Flush()
+
         $line = $reader.ReadLine()
         if ([string]::IsNullOrWhiteSpace($line)) {
             throw "Guest health probe returned an empty response."
+        }
+        if ($line -eq 'ERR AUTH') {
+            throw "Guest rejected the current Jawal session token."
         }
         $health = $line | ConvertFrom-Json
         break
@@ -41,6 +65,8 @@ while ([DateTime]::UtcNow -lt $deadline) {
         Start-Sleep -Milliseconds 500
     }
     finally {
+        if ($writer) { $writer.Dispose() }
+        if ($reader) { $reader.Dispose() }
         if ($client) { $client.Dispose() }
     }
 }
