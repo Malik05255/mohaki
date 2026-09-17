@@ -57,11 +57,37 @@ if ($RequireWebView -and [string]::IsNullOrWhiteSpace([string]$health.webview)) 
 if ($RequireNetwork -and -not $health.networkInternet) {
     throw "Android did not report an INTERNET-capable active network."
 }
-if ($RequireAudio -and -not $health.audioOutput) {
-    throw "Android did not report audio output support."
+if ($RequireAudio) {
+    if (-not $health.audioOutput) {
+        throw "Android did not report audio output support."
+    }
+    if (-not $health.microphone) {
+        throw "Android did not report the duplex microphone capability Jawal exposes."
+    }
 }
-if ($RequirePhoneFeatures -and (-not $health.touchscreen -or -not $health.portrait)) {
-    throw "Android is not exposing the expected handheld touchscreen/portrait feature set."
+if ($RequirePhoneFeatures) {
+    if (-not $health.touchscreen -or -not $health.portrait) {
+        throw "Android is not exposing the expected touchscreen/portrait feature set."
+    }
+
+    $characteristics = ([string]$health.buildCharacteristics).ToLowerInvariant()
+    $characteristicSet = @($characteristics.Split(',') | ForEach-Object { $_.Trim() } | Where-Object { $_ })
+    if ($characteristicSet -notcontains 'phone') {
+        throw "Android build characteristics are not phone-oriented: '$($health.buildCharacteristics)'."
+    }
+    if ($characteristicSet -contains 'tablet') {
+        throw "Android unexpectedly reports the tablet build characteristic."
+    }
+
+    $densityDpi = [int]$health.densityDpi
+    if ($densityDpi -lt 320 -or $densityDpi -gt 560) {
+        throw "Android display density $densityDpi dpi is outside Jawal's phone-scale range (320-560 dpi)."
+    }
+
+    $smallestWidthDp = [int]$health.smallestScreenWidthDp
+    if ($smallestWidthDp -lt 320 -or $smallestWidthDp -ge 600) {
+        throw "Android smallest width is $smallestWidthDp dp; expected a phone layout below 600 dp."
+    }
 }
 
 if (-not [string]::IsNullOrWhiteSpace($OutputJson)) {
