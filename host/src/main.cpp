@@ -120,17 +120,42 @@ bool EnsureDataOverlay(const std::filesystem::path& runtime,
     if (!std::filesystem::exists(qemuImg) || !std::filesystem::exists(dataTemplate)) return false;
 
     const auto marker = userData.parent_path() / L"data-independent-v1.marker";
-    if (std::filesystem::exists(userData) && std::filesystem::exists(marker)) return true;
-
     auto temporary = userData;
     temporary += L".creating";
     auto previous = userData;
     previous += L".pre-standalone";
 
     std::error_code ec;
+
+    // Completed migration from an earlier launch. A crash may have happened
+    // after writing the marker but before removing the rollback image.
+    if (std::filesystem::exists(userData) && std::filesystem::exists(marker)) {
+        std::filesystem::remove(temporary, ec);
+        ec.clear();
+        std::filesystem::remove(previous, ec);
+        return true;
+    }
+
+    // Crash recovery: if the old image was moved aside but the converted image
+    // was not installed yet, restore the old image first. Never discard it.
+    if (!std::filesystem::exists(userData) && std::filesystem::exists(previous)) {
+        std::filesystem::rename(previous, userData, ec);
+        if (ec) return false;
+    }
+
+    // Another safe crash point is after the converted image was installed but
+    // before the marker/cleanup completed. Both files exist then; the current
+    // userData was produced by a successful qemu-img convert and is standalone.
+    if (std::filesystem::exists(userData) && std::filesystem::exists(previous) &&
+        !std::filesystem::exists(marker)) {
+        if (!WriteStandaloneDataMarker(marker)) return false;
+        std::filesystem::remove(previous, ec);
+        ec.clear();
+        std::filesystem::remove(temporary, ec);
+        return true;
+    }
+
     std::filesystem::remove(temporary, ec);
-    ec.clear();
-    std::filesystem::remove(previous, ec);
 
     if (!std::filesystem::exists(userData)) {
         // Copy the sparse empty template into a self-contained QCOW2. Do not use
@@ -153,7 +178,7 @@ bool EnsureDataOverlay(const std::filesystem::path& runtime,
     // backing overlay over runtime/images/jawal-data-template.qcow2. qemu-img
     // convert resolves the complete chain into an independent image before the
     // runtime is allowed to boot. The original stays available for rollback
-    // until the standalone image has been atomically installed.
+    // until the standalone image and marker are safely installed.
     if (!ConvertQcow2Standalone(qemuImg, userData, temporary, runtime)) {
         std::filesystem::remove(temporary, ec);
         return false;
@@ -333,13 +358,20 @@ bool FactoryReset(HWND owner) {
     const auto dataDirectory = LocalDataDirectory();
     const auto userData = dataDirectory / L"data.qcow2";
     const auto standaloneMarker = dataDirectory / L"data-independent-v1.marker";
+    auto creatingData = userData;
+    creatingData += L".creating";
+    auto previousData = userData;
+    previousData += L".pre-standalone";
 
     InvalidateQuickResume();
-    std::error_code ec;
-    std::filesystem::remove(userData, ec);
-    std::filesystem::remove(standaloneMarker, ec);
-    if (ec && std::filesystem::exists(userData)) {
-        jawal::LogDiagnostic(L"Factory reset failed deleting data image");
+    bool removalFailed = false;
+    for (const auto& artifact : {userData, standaloneMarker, creatingData, previousData}) {
+        std::error_code removeError;
+        std::filesystem::remove(artifact, removeError);
+        if (removeError && std::filesystem::exists(artifact)) removalFailed = true;
+    }
+    if (removalFailed) {
+        jawal::LogDiagnostic(L"Factory reset failed deleting data artifacts");
         MessageBoxW(owner,
                     L"تعذر حذف بيانات الجوال الحالية. أغلق أي برنامج يستخدم ملفات Jawal ثم حاول مرة أخرى.",
                     L"فورمات جوال", MB_OK | MB_ICONERROR | MB_RTLREADING);
