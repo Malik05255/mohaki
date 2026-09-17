@@ -62,7 +62,53 @@ cat > .repo/local_manifests/jawal-minimal-physical-hardware.xml <<'XML'
 XML
 rm -f .repo/local_manifests/jawal-minimal-firmware.xml
 
-repo sync -c --force-sync --no-tags --no-clone-bundle --optimized-fetch --prune -j"${JAWAL_SYNC_JOBS:-8}"
+# Large Android syncs occasionally fail for transient network reasons. Retry the
+# same deterministic manifest up to three times, reducing concurrency after a
+# failure instead of discarding the already downloaded object data.
+sync_jobs="${JAWAL_SYNC_JOBS:-8}"
+sync_attempt=1
+while true; do
+  echo "Jawal repo sync attempt $sync_attempt/3 with -j$sync_jobs"
+  if repo sync -c --force-sync --no-tags --no-clone-bundle --optimized-fetch --prune -j"$sync_jobs"; then
+    break
+  fi
+  if (( sync_attempt >= 3 )); then
+    echo "repo sync failed after $sync_attempt attempts." >&2
+    exit 6
+  fi
+  sync_attempt=$((sync_attempt + 1))
+  if (( sync_jobs > 4 )); then
+    sync_jobs=$((sync_jobs / 2))
+    (( sync_jobs < 4 )) && sync_jobs=4
+  fi
+  sleep 10
+done
+
+# `repo sync` does not guarantee that a working directory from a project removed
+# by a later local manifest is deleted on a persistent self-hosted runner. First
+# prove the excluded paths are absent from the active manifest, then remove stale
+# checkouts so Soong cannot discover dead Android.bp files from an earlier sync.
+pruned_source_paths=(
+  device/generic/firmware
+  vendor/intel/proprietary/sof-bin
+  vendor/silead/proprietary/firmware
+  external/libva
+  external/libva-utils
+  hardware/intel/common/gmmlib
+  hardware/intel/common/media-driver
+  hardware/intel/common/vaapi
+)
+manifest_paths="$(repo list -p)"
+for path in "${pruned_source_paths[@]}"; do
+  if grep -Fxq "$path" <<<"$manifest_paths"; then
+    echo "Excluded physical-hardware project is still active in repo manifest: $path" >&2
+    exit 7
+  fi
+  if [[ -e "$path" || -L "$path" ]]; then
+    echo "Removing stale excluded checkout: $path"
+    rm -rf -- "$path"
+  fi
+done
 
 rm -rf device/jawal vendor/jawal
 mkdir -p device/jawal vendor/jawal
@@ -137,6 +183,8 @@ python3 "$ROOT/tools/analyze-jawalos-size.py" \
   printf 'physical_firmware_projects=%s\n' 'excluded-before-sync'
   printf 'intel_physical_media_projects=%s\n' 'excluded-before-sync'
   printf 'android_ota_recovery=%s\n' 'disabled-at-source'
+  printf 'repo_sync_attempts=%s\n' "$sync_attempt"
+  printf 'repo_sync_final_jobs=%s\n' "$sync_jobs"
 } > "$OUT_DIR/build-metadata.txt"
 
 "$ROOT/tools/validate-product.sh" "$PRODUCT_OUT" "$OUT_DIR"
