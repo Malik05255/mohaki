@@ -112,18 +112,23 @@ python3 "$ROOT/tools/analyze-jawalos-size.py" \
   printf 'build_type=%s\n' "$BUILD_TYPE"
   printf 'native_bridge=%s\n' "$NATIVE_BRIDGE"
   printf 'lunch_target=%s\n' "$LUNCH_TARGET"
+  printf 'kernel_diffconfig=%s\n' 'device/jawal/jawal-kernel-minimal.config'
 } > "$OUT_DIR/build-metadata.txt"
 
 "$ROOT/tools/validate-product.sh" "$PRODUCT_OUT" "$OUT_DIR"
 bash "$ROOT/tools/validate-hardware-pruning.sh" "$PRODUCT_OUT" "$OUT_DIR"
+bash "$ROOT/tools/validate-kernel-profile.sh" "$PRODUCT_OUT" "$OUT_DIR"
 {
   printf '\n===== Fixed-VM hardware pruning =====\n'
   cat "$OUT_DIR/hardware-pruning.txt"
+  printf '\n===== Minimal kernel/firmware profile =====\n'
+  cat "$OUT_DIR/kernel-profile.txt"
 } >> "$OUT_DIR/validation.txt"
 
-printf '\nJawal Android build complete:\n  %s\n  %s\n  %s\n  %s\n  %s\n' \
+printf '\nJawal Android build complete:\n  %s\n  %s\n  %s\n  %s\n  %s\n  %s\n' \
   "$OUT_DIR/jawal-android.iso" \
   "$OUT_DIR/JawalSmokeApp.apk" \
   "$OUT_DIR/JawalArm64Smoke.apk" \
   "$OUT_DIR/size-analysis.md" \
-  "$OUT_DIR/pruning-plan.md"
+  "$OUT_DIR/pruning-plan.md" \
+  "$OUT_DIR/kernel-profile.txt"
